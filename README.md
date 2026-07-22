@@ -35,6 +35,24 @@ only way to get freehand cropping *and* a real cropped file. This plugin provide
 
 > Screenshots live in [`art/`](art/) — drop your own captures there (see that folder's note for the expected filenames).
 
+## Demo app
+
+Want to try it before wiring it into your own project? There's a full sample
+NativePHP app that showcases this plugin with **five ready-made examples**
+(full studio, locked profile avatar, locked cover, adjust-only, filter-only):
+
+**👉 [vipertecpro/supernativephp-image-manipulation](https://github.com/vipertecpro/supernativephp-image-manipulation)**
+
+```bash
+git clone https://github.com/vipertecpro/supernativephp-image-manipulation
+cd supernativephp-image-manipulation
+composer install
+php artisan native:run ios   # or: android
+```
+
+Each example is a tiny `NativeComponent` that just declares its crop config, so
+it doubles as copy-paste reference for common use cases.
+
 ---
 
 ## Requirements
