@@ -12,7 +12,7 @@
     "homepage": "https://github.com/vipertecpro/image-cropper",
     "keywords": ["nativephp", "mobile", "image", "crop", "cropper", "photo", "editor"],
     "require": {
-        "php": "^8.2",
+        "php": "^8.4",
         "nativephp/mobile": "^3.0|^4.0"
     },
     "suggest": {

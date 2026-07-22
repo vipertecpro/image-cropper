@@ -4,6 +4,14 @@ All notable changes to `vipertecpro/image-cropper` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this
 project adheres to [Semantic Versioning](https://semver.org).
 
+## [1.1.0] - 2026-07-23
+
+### Changed
+- **Require PHP 8.4+** — dropped support for PHP 8.2 / 8.3.
+
+### Added
+- Total-downloads and PHP-version badges in the README.
+
 ## [1.0.2] - 2026-07-23
 
 ### Fixed
@@ -35,6 +43,7 @@ First complete, usable release.
 
 - Initial release. **Incomplete — superseded by 1.0.1.** Please use 1.0.1 or newer.
 
+[1.1.0]: https://github.com/vipertecpro/image-cropper/releases/tag/v1.1.0
 [1.0.2]: https://github.com/vipertecpro/image-cropper/releases/tag/v1.0.2
 [1.0.1]: https://github.com/vipertecpro/image-cropper/releases/tag/v1.0.1
 [1.0.0]: https://github.com/vipertecpro/image-cropper/releases/tag/v1.0.0
