@@ -98,7 +98,7 @@ final class ImageCropperPresenter {
     private var hosting: UIViewController?
 
     func present(config: CropConfig) {
-        guard let image = UIImage(contentsOfFile: config.path), let rootVC = Self.top() else {
+        guard let image = UIImage(contentsOfFile: config.path) else {
             fire(CropEvents.cancelled, ["id": config.id as Any]); return
         }
         let view = EditorView(
@@ -119,7 +119,21 @@ final class ImageCropperPresenter {
         host.modalPresentationStyle = .fullScreen
         host.view.backgroundColor = .systemBackground
         hosting = host
-        rootVC.present(host, animated: true)
+        // Present once the top view controller is idle. When Open is called right
+        // after the gallery picker is dismissed, the picker is still mid-dismiss
+        // and iOS SILENTLY refuses the presentation — so we retry until it's ready.
+        presentWhenReady(host, id: config.id, attempts: 0)
+    }
+
+    private func presentWhenReady(_ host: UIViewController, id: String?, attempts: Int) {
+        guard let top = Self.top(), !top.isBeingDismissed, !top.isBeingPresented else {
+            guard attempts < 25 else { fire(CropEvents.cancelled, ["id": id as Any]); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                self?.presentWhenReady(host, id: id, attempts: attempts + 1)
+            }
+            return
+        }
+        top.present(host, animated: true)
     }
 
     private func dismiss() { hosting?.dismiss(animated: true); hosting = nil }
