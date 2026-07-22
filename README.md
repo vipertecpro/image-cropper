@@ -1,5 +1,9 @@
 # ImageCropper — a native freehand image cropper for NativePHP Mobile
 
+[![Packagist Version](https://img.shields.io/packagist/v/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper)
+[![License](https://img.shields.io/packagist/l/vipertecpro/image-cropper.svg?style=flat-square)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-blue?style=flat-square)](#requirements)
+
 A **fully native, hand-written** image cropper. It opens a real native screen
 (SwiftUI on iOS, Jetpack Compose on Android) where the user manipulates the image
 **freehand** — drag to reposition (2D), pinch to zoom, and rotate with two fingers,
@@ -12,6 +16,24 @@ this package and yours to extend.
 Why a plugin? The on-device PHP runtime has **no image extensions** (no GD/Imagick),
 and EDGE's gesture layer has **no 2D drag or rotate gesture**. Native code is the
 only way to get freehand cropping *and* a real cropped file. This plugin provides both.
+
+## Features
+
+- ✂️ **Freehand crop** — 2D drag, pinch-zoom and two-finger rotate, all at once
+- ⭕ **Shapes & presets** — circle or rectangle; built-in Profile / Square / Portrait / 16:9 / Cover / Banner / Story, switchable live in-screen
+- 🎨 **Adjust & filter** — brightness / contrast / saturation and one-tap filter presets, baked into the output
+- 🧩 **Fully configurable** — enable only the modes/tools you need (a bare crop-only editor, or adjust-only with no crop, …)
+- 🌗 **Theme-aware** — follows the system light / dark theme
+- 📦 **Zero dependencies** — no third-party native libraries, no permissions, no network (~65 KB of native source)
+- 🍏 🤖 **iOS + Android** — hand-written SwiftUI + Jetpack Compose behind one PHP API
+
+## Screenshots
+
+| Crop | Adjust | Filter |
+|:---:|:---:|:---:|
+| ![Crop mode](art/editor-crop.png) | ![Adjust mode](art/editor-adjust.png) | ![Filter mode](art/editor-filter.png) |
+
+> Screenshots live in [`art/`](art/) — drop your own captures there (see that folder's note for the expected filenames).
 
 ---
 
@@ -58,6 +80,25 @@ only way to get freehand cropping *and* a real cropped file. This plugin provide
 > Always run `native:plugin:register` and confirm with `native:plugin:list`.
 
 ---
+
+## Getting an image to crop
+
+This plugin's only input is a **file path** to an existing image — `ImageCropper::open($path)`.
+It does **not** capture or pick photos itself, so it has **no hard dependency** on any
+camera/gallery plugin. Any source of a path works: the filesystem, a bundled asset, a
+download, or a picker of your choice.
+
+If you need a picker, [`nativephp/mobile-camera`](https://nativephp.com/plugins/nativephp/mobile-camera)
+is a convenient one (it's listed under `suggest` in this package, not `require`) — install and
+register it separately, then hand its result path to `ImageCropper::open()`:
+
+```php
+// with nativephp/mobile-camera installed + registered
+use Native\Mobile\Facades\Camera;
+
+Camera::pickImages('images', false);   // fires MediaSelected → you get $files[0]
+// …then: ImageCropper::open($files[0], ['preset' => 'profile']);
+```
 
 ## Usage (SuperNative — the v4 way)
 
@@ -113,7 +154,9 @@ The crop experience is **configurable** so one plugin covers many use cases.
 | `preset` | `profile` (circle), `square`, `portrait`, `landscape`, `cover`, `banner`, `story` | — |
 | `shape` | `circle` \| `rect` (overrides the preset) | `rect` |
 | `aspectRatio` | width / height, e.g. `16/9` (overrides the preset) | `1.0` |
-| `tools` | any of `['zoom', 'rotate']` — only these fine-tune rulers show | both |
+| `tools` | any of `['zoom', 'rotate']` — only these crop fine-tune rulers show | both |
+| `modes` | any of `['crop', 'adjust', 'filter']` — the editor modes offered; opens on the first | all three |
+| `presets` | list of preset keys offered in the in-screen selector; `[]` hides it & locks the crop | all |
 | `outputSize` | longest edge of the output, px | `1024` |
 | `id` | correlation id echoed back on the event | `null` |
 
@@ -121,7 +164,22 @@ The crop experience is **configurable** so one plugin covers many use cases.
 ImageCropper::open($path, ['preset' => 'profile']);                       // round avatar
 ImageCropper::open($path, ['preset' => 'cover']);                         // wide banner
 ImageCropper::open($path, ['shape' => 'rect', 'aspectRatio' => 3.0, 'tools' => ['zoom']]);
+
+// A bare, locked cropper — no preset switching, no colour editing:
+ImageCropper::open($path, [
+    'preset' => 'profile',   // circle 1:1
+    'presets' => [],         // lock it
+    'modes' => ['crop'],     // crop only — no adjust / filter
+]);
+
+// No crop at all — operate on the WHOLE image and export the full photo:
+ImageCropper::open($path, ['modes' => ['adjust']]);   // colour adjustments only
+ImageCropper::open($path, ['modes' => ['filter']]);   // one-tap filters only
 ```
+
+> When `modes` omits `crop`, the editor drops the crop frame and gestures
+> entirely, shows the whole image, and exports the full photo (longest edge =
+> `outputSize`) with the colour baked in.
 
 The native screen is a small editor with three modes, chosen from the bottom bar
 (`Cancel · Crop / Adjust / Filter · Done`):

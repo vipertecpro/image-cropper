@@ -45,6 +45,7 @@ struct CropConfig {
     let shape: String
     let aspectRatio: CGFloat
     let tools: [String]
+    let modes: [String]
     let presets: [CropPreset]
     let outputSize: Int
     let id: String?
@@ -55,6 +56,8 @@ struct CropConfig {
         let ratio = (p["aspectRatio"] as? NSNumber)?.doubleValue ?? 1.0
         aspectRatio = CGFloat(ratio > 0 ? ratio : 1.0)
         tools = (p["tools"] as? [String])?.filter { ["zoom", "rotate"].contains($0) } ?? ["zoom", "rotate"]
+        let requested = (p["modes"] as? [String])?.filter { ["crop", "adjust", "filter"].contains($0) } ?? []
+        modes = requested.isEmpty ? ["crop", "adjust", "filter"] : requested
         outputSize = (p["outputSize"] as? NSNumber)?.intValue ?? 1024
         id = p["id"] as? String
         presets = ((p["presets"] as? [[String: Any]]) ?? []).map {
@@ -114,7 +117,7 @@ final class ImageCropperPresenter {
         )
         let host = UIHostingController(rootView: view)
         host.modalPresentationStyle = .fullScreen
-        host.view.backgroundColor = .black
+        host.view.backgroundColor = .systemBackground
         hosting = host
         rootVC.present(host, animated: true)
     }
@@ -171,7 +174,7 @@ private struct EditorView: View {
     @State private var cropSub = "zoom"          // zoom | rotate
     @State private var adjustSub = "brightness"  // brightness | contrast | saturation
     @State private var showDiscard = false
-    @State private var showOriginal = false      // press-and-hold to compare
+    @State private var stageSize: CGSize = .zero // measured image-area size (drives Done geometry)
 
     private let accent = Color(red: 0.92, green: 0.47, blue: 0.18)
 
@@ -180,6 +183,7 @@ private struct EditorView: View {
         _shape = State(initialValue: config.shape)
         _aspectRatio = State(initialValue: config.aspectRatio)
         _cropSub = State(initialValue: config.tools.first ?? "zoom")
+        _mode = State(initialValue: config.modes.first ?? "crop")
     }
 
     private var edited: Bool {
@@ -187,82 +191,97 @@ private struct EditorView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            // The image area is a fixed slice of the screen so the crop frame and
-            // the image share ONE coordinate space (both centred in this box).
-            let stageH = geo.size.height * 0.60
-            let container = CGSize(width: geo.size.width, height: stageH)
-            let viewport = Self.viewport(for: container, ratio: aspectRatio)
-            // COVER the crop frame at user-scale 1 (so there's never black inside).
-            let coverScale = max(viewport.width / image.size.width, viewport.height / image.size.height)
-            let display = CGSize(width: image.size.width * coverScale, height: image.size.height * coverScale)
+        VStack(spacing: 0) {
+            // ---- Title bar: back button + dynamic mode title ----
+            ZStack {
+                HStack {
+                    Button { edited ? (showDiscard = true) : onCancel() } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.primary).frame(width: 40, height: 40)
+                    }
+                    Spacer()
+                }
+                Text(mode == "adjust" ? "Adjust" : (mode == "filter" ? "Filter" : "Crop"))
+                    .font(.system(size: 17, weight: .semibold)).foregroundColor(.primary)
+            }
+            .frame(height: 52).padding(.horizontal, 8)
 
-            VStack(spacing: 0) {
-                // ---- Image area (top) ----
-                ZStack {
+            // ---- Image area: fills the space between the title bar and the controls.
+            // A GeometryReader measures the actual area so the crop frame + image share
+            // ONE coordinate space; the size is hoisted to `stageSize` for the Done crop.
+            GeometryReader { ig in
+                let container = ig.size
+                if config.modes.contains("crop") {
+                    let viewport = Self.viewport(for: container, ratio: aspectRatio)
+                    // COVER the crop frame at user-scale 1 (so there's never black inside).
+                    let coverScale = max(viewport.width / image.size.width, viewport.height / image.size.height)
+                    let display = CGSize(width: image.size.width * coverScale, height: image.size.height * coverScale)
+                    ZStack {
+                        Image(uiImage: image)
+                            .resizable()
+                            .frame(width: display.width, height: display.height)
+                            .scaleEffect(scale * pinch)
+                            .rotationEffect(.degrees(rotationDeg) + spin)
+                            .offset(x: offset.width + drag.width, y: offset.height + drag.height)
+                            // Live colour preview (baked into the output on Done).
+                            .brightness(brightness / 100 * 0.5)
+                            .contrast(1 + contrast / 100)
+                            .saturation(max(0, 1 + saturation / 100))
+
+                        CropMask(viewport: viewport, circle: shape == "circle").allowsHitTesting(false)
+                    }
+                    .frame(width: container.width, height: container.height)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .gesture(DragGesture().updating($drag) { v, s, _ in s = v.translation }
+                        .onEnded { v in
+                            offset = clampOffset(CGSize(width: offset.width + v.translation.width,
+                                                        height: offset.height + v.translation.height),
+                                                 display: display, scale: scale, viewport: viewport)
+                        })
+                    .simultaneousGesture(MagnificationGesture().updating($pinch) { v, s, _ in s = v }
+                        .onEnded { v in
+                            scale = min(8, max(1, scale * v))
+                            offset = clampOffset(offset, display: display, scale: scale, viewport: viewport)
+                        })
+                    .simultaneousGesture(RotationGesture().updating($spin) { v, s, _ in s = v }
+                        .onEnded { v in
+                            rotationDeg += v.degrees
+                            offset = clampOffset(offset, display: display, scale: scale, viewport: viewport)
+                        })
+                    .onAppear { stageSize = container }
+                    .onChange(of: container) { stageSize = $0 }
+                } else {
+                    // Adjust / filter only: show the WHOLE image, no crop frame or gestures.
+                    let fit = min(container.width / image.size.width, container.height / image.size.height) * 0.92
                     Image(uiImage: image)
                         .resizable()
-                        .frame(width: display.width, height: display.height)
-                        .scaleEffect(scale * pinch)
-                        .rotationEffect(.degrees(rotationDeg) + spin)
-                        .offset(x: offset.width + drag.width, y: offset.height + drag.height)
-                        // Press-and-hold the eye to compare — colour adjustments
-                        // drop to neutral while held.
-                        .brightness(showOriginal ? 0 : brightness / 100 * 0.5)
-                        .contrast(showOriginal ? 1 : 1 + contrast / 100)
-                        .saturation(showOriginal ? 1 : max(0, 1 + saturation / 100))
-
-                    CropMask(viewport: viewport, circle: shape == "circle").allowsHitTesting(false)
+                        .frame(width: image.size.width * fit, height: image.size.height * fit)
+                        .brightness(brightness / 100 * 0.5)
+                        .contrast(1 + contrast / 100)
+                        .saturation(max(0, 1 + saturation / 100))
+                        .frame(width: container.width, height: container.height)
+                        .onAppear { stageSize = container }
                 }
-                .frame(width: geo.size.width, height: stageH)
-                .clipped()
-                .overlay(alignment: .topTrailing) {
-                    Image(systemName: showOriginal ? "eye.fill" : "eye")
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                        .frame(width: 40, height: 40)
-                        .background(Circle().fill(Color.black.opacity(0.4)))
-                        .padding(12)
-                        .gesture(DragGesture(minimumDistance: 0)
-                            .onChanged { _ in showOriginal = true }
-                            .onEnded { _ in showOriginal = false })
-                }
-                .contentShape(Rectangle())
-                .gesture(DragGesture().updating($drag) { v, s, _ in s = v.translation }
-                    .onEnded { v in
-                        offset = clampOffset(CGSize(width: offset.width + v.translation.width,
-                                                    height: offset.height + v.translation.height),
-                                             display: display, scale: scale, viewport: viewport)
-                    })
-                .simultaneousGesture(MagnificationGesture().updating($pinch) { v, s, _ in s = v }
-                    .onEnded { v in
-                        scale = min(8, max(1, scale * v))
-                        offset = clampOffset(offset, display: display, scale: scale, viewport: viewport)
-                    })
-                .simultaneousGesture(RotationGesture().updating($spin) { v, s, _ in s = v }
-                    .onEnded { v in
-                        rotationDeg += v.degrees
-                        offset = clampOffset(offset, display: display, scale: scale, viewport: viewport)
-                    })
+            }
 
-                // ---- Bottom controls ----
-                VStack(spacing: 14) {
+            // ---- Bottom controls (wrap content; the image area above takes the slack) ----
+            VStack(spacing: 14) {
                     if mode == "crop" && !config.presets.isEmpty { presetStrip }
 
                     if mode == "filter" {
                         filterStrip
                     } else {
                         subToolTabs
-                        ruler(viewport: viewport)
+                        ruler()
                     }
 
-                    modeBar(fitScale: coverScale, viewport: viewport)
-                }
-                .frame(maxHeight: .infinity)
-                .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 20)
+                    modeBar()
             }
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(Color(.systemBackground).ignoresSafeArea())
         .alert("Discard Changes", isPresented: $showDiscard) {
             Button("Cancel", role: .cancel) {}
             Button("Discard", role: .destructive) { onCancel() }
@@ -283,8 +302,8 @@ private struct EditorView: View {
                     } label: {
                         VStack(spacing: 4) {
                             Image(systemName: p.shape == "circle" ? "person.crop.circle" : "crop")
-                                .foregroundColor(on ? .green : .white.opacity(0.7))
-                            Text(p.label).font(.system(size: 11)).foregroundColor(on ? .green : .white.opacity(0.6))
+                                .foregroundColor(on ? .green : .primary.opacity(0.7))
+                            Text(p.label).font(.system(size: 11)).foregroundColor(on ? .green : .primary.opacity(0.6))
                         }
                     }
                 }
@@ -302,14 +321,14 @@ private struct EditorView: View {
             ForEach(items, id: \.0) { key, label in
                 Button(label) { if mode == "crop" { cropSub = key } else { adjustSub = key } }
                     .font(.system(size: 14, weight: active == key ? .semibold : .regular))
-                    .foregroundColor(active == key ? .white : .white.opacity(0.45))
+                    .foregroundColor(active == key ? .primary : .primary.opacity(0.45))
             }
         }
     }
 
     // Row 2 — ruler bound to the active value.
     @ViewBuilder
-    private func ruler(viewport: CGSize) -> some View {
+    private func ruler() -> some View {
         if mode == "crop" && cropSub == "zoom" {
             RulerSlider(value: Double(scale), range: 1...8, display: String(format: "%.1fx", Double(scale))) { scale = CGFloat($0) }
         } else if mode == "crop" {
@@ -337,8 +356,8 @@ private struct EditorView: View {
                                 .brightness(f.brightness / 100 * 0.5).contrast(1 + f.contrast / 100)
                                 .saturation(max(0, 1 + f.saturation / 100))
                                 .overlay(RoundedRectangle(cornerRadius: 10)
-                                    .stroke(on ? Color.green : Color.white.opacity(0.2), lineWidth: on ? 2 : 1))
-                            Text(f.name).font(.system(size: 11)).foregroundColor(on ? .green : .white.opacity(0.7))
+                                    .stroke(on ? Color.green : Color.primary.opacity(0.2), lineWidth: on ? 2 : 1))
+                            Text(f.name).font(.system(size: 11)).foregroundColor(on ? .green : .primary.opacity(0.7))
                         }
                     }
                 }
@@ -347,14 +366,19 @@ private struct EditorView: View {
     }
 
     // Row 3 — Cancel | crop / adjust / filter | Done
-    private func modeBar(fitScale: CGFloat, viewport: CGSize) -> some View {
-        HStack {
-            Button("Cancel") { edited ? (showDiscard = true) : onCancel() }.foregroundColor(.white)
+    private func modeBar() -> some View {
+        let viewport = Self.viewport(for: stageSize, ratio: aspectRatio)
+        let fitScale = max(viewport.width / image.size.width, viewport.height / image.size.height)
+        return HStack {
+            Button("Cancel") { edited ? (showDiscard = true) : onCancel() }.foregroundColor(.primary)
             Spacer()
-            HStack(spacing: 26) {
-                modeIcon("crop", "crop")
-                modeIcon("adjust", "slider.horizontal.3")
-                modeIcon("filter", "camera.filters")
+            // Only show the mode switcher when more than one mode is enabled.
+            if config.modes.count > 1 {
+                HStack(spacing: 26) {
+                    if config.modes.contains("crop") { modeIcon("crop", "crop") }
+                    if config.modes.contains("adjust") { modeIcon("adjust", "slider.horizontal.3") }
+                    if config.modes.contains("filter") { modeIcon("filter", "camera.filters") }
+                }
             }
             Spacer()
             Button("Done") {
@@ -369,9 +393,9 @@ private struct EditorView: View {
         Button { mode = key } label: {
             Image(systemName: symbol)
                 .font(.system(size: 20))
-                .foregroundColor(mode == key ? .black : .white.opacity(0.7))
+                .foregroundColor(mode == key ? Color(.systemBackground) : .primary.opacity(0.7))
                 .frame(width: 46, height: 46)
-                .background(Circle().fill(mode == key ? Color.white : Color.clear))
+                .background(Circle().fill(mode == key ? Color.primary : Color.clear))
         }
     }
 
@@ -482,7 +506,7 @@ private struct RulerSlider: View {
             HStack(spacing: (w - CGFloat(n) * 2) / CGFloat(n - 1)) {
                 ForEach(0..<n, id: \.self) { i in
                     let f = Double(i) / Double(n - 1)
-                    Capsule().fill(f <= fraction ? Color.green : Color.white.opacity(0.25))
+                    Capsule().fill(f <= fraction ? Color.green : Color.primary.opacity(0.25))
                         .frame(width: 2, height: i % 5 == 0 ? 20 : 11)
                 }
             }
@@ -495,8 +519,8 @@ private struct RulerSlider: View {
     }
 
     private func icon(_ name: String) -> some View {
-        Image(systemName: name).foregroundColor(.white.opacity(0.85))
-            .frame(width: 34, height: 34).background(Circle().fill(Color.white.opacity(0.08)))
+        Image(systemName: name).foregroundColor(.primary.opacity(0.85))
+            .frame(width: 34, height: 34).background(Circle().fill(Color.primary.opacity(0.08)))
     }
     private func clamp(_ v: Double) -> Double { min(range.upperBound, max(range.lowerBound, v)) }
 }
@@ -505,6 +529,26 @@ private struct RulerSlider: View {
 
 enum CropRenderer {
     static func render(image: UIImage, state: CropState, config: CropConfig) -> String? {
+        // No crop mode → export the WHOLE image (longest edge = outputSize) + colour.
+        if !config.modes.contains("crop") {
+            let s = CGFloat(config.outputSize) / max(1, max(image.size.width, image.size.height))
+            let outSize = CGSize(width: image.size.width * s, height: image.size.height * s)
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1
+            let full = UIGraphicsImageRenderer(size: outSize, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: outSize))
+            }
+            let coloured = applyColour(full, state: state)
+            var url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("cropped_\(Int(Date().timeIntervalSince1970 * 1000)).jpg")
+            guard let data = coloured.jpegData(compressionQuality: 0.92) else { return nil }
+            do {
+                try data.write(to: url)
+                var rv = URLResourceValues(); rv.isExcludedFromBackup = true
+                try? url.setResourceValues(rv)
+                return url.path(percentEncoded: false)
+            } catch { return nil }
+        }
+
         let ratio = state.aspectRatio
         let outW: CGFloat, outH: CGFloat
         if ratio >= 1 { outW = CGFloat(config.outputSize); outH = CGFloat(config.outputSize) / ratio }

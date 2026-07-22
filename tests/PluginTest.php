@@ -190,6 +190,11 @@ describe('Cropper API', function () {
         // Explicit overrides win over the preset.
         $custom = $resolve->invoke($cropper, '/a.jpg', ['preset' => 'profile', 'shape' => 'rect']);
         expect($custom['shape'])->toBe('rect');
+
+        // Modes default to all three; a subset strips the editor down.
+        expect($profile['modes'])->toBe(['crop', 'adjust', 'filter']);
+        $bare = $resolve->invoke($cropper, '/a.jpg', ['modes' => ['crop'], 'presets' => []]);
+        expect($bare['modes'])->toBe(['crop'])->and($bare['presets'])->toBe([]);
     });
 
     it('ships the configurable native crop UI (mask + ruler) on both platforms', function () {
@@ -224,10 +229,6 @@ describe('Cropper API', function () {
         // Colour is baked into the output, not just previewed.
         expect($swift)->toContain('CIColorControls');
         expect($kotlin)->toContain('ColorMatrix');
-
-        // Press-and-hold "show original" compare.
-        expect($swift)->toContain('showOriginal');
-        expect($kotlin)->toContain('showOriginal');
     });
 
     it('carries the switchable preset list in the resolved config', function () {

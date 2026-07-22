@@ -61,6 +61,13 @@ class ImageCropper
     public const AVAILABLE_TOOLS = ['zoom', 'rotate'];
 
     /**
+     * Editor modes that can be enabled per call. Pass a subset to strip the UI
+     * down — e.g. `['crop']` for a bare cropper with no colour editing. The
+     * first entry is the mode the editor opens on.
+     */
+    public const AVAILABLE_MODES = ['crop', 'adjust', 'filter'];
+
+    /**
      * Open the native crop screen.
      *
      * @param  string  $path  Absolute path to the source image (jpg/png).
@@ -69,11 +76,16 @@ class ImageCropper
      *     shape?: string,
      *     aspectRatio?: float,
      *     tools?: list<string>,
+     *     modes?: list<string>,
+     *     presets?: list<string>,
      *     outputSize?: int,
      *     id?: string|null
      * }  $options  Crop configuration. `preset` sets shape+ratio; explicit
-     *              `shape`/`aspectRatio` override it. `tools` picks which
-     *              fine-tune controls appear (defaults to zoom + rotate).
+     *              `shape`/`aspectRatio` override it. `tools` picks which crop
+     *              fine-tune controls appear (zoom/rotate). `modes` picks which
+     *              editor modes are available (crop/adjust/filter) — pass
+     *              `['crop']` for a bare cropper. `presets` is the list of
+     *              switchable presets offered in-screen (`[]` locks the crop).
      *
      * Fires {@see ImageCropped} on success and
      * {@see CropCancelled} on cancel.
@@ -91,7 +103,7 @@ class ImageCropper
      * Merge caller options with the chosen preset and sane defaults into the
      * flat config the native side consumes.
      *
-     * @return array{path: string, shape: string, aspectRatio: float, tools: list<string>, outputSize: int, id: string|null}
+     * @return array{path: string, shape: string, aspectRatio: float, tools: list<string>, modes: list<string>, presets: list<array{key: string, label: string, shape: string, aspectRatio: float}>, outputSize: int, id: string|null}
      */
     protected function resolveConfig(string $path, array $options): array
     {
@@ -102,11 +114,17 @@ class ImageCropper
             self::AVAILABLE_TOOLS,
         ));
 
+        $modes = array_values(array_intersect(
+            $options['modes'] ?? self::AVAILABLE_MODES,
+            self::AVAILABLE_MODES,
+        ));
+
         return [
             'path' => $path,
             'shape' => $options['shape'] ?? $preset['shape'],
             'aspectRatio' => (float) ($options['aspectRatio'] ?? $preset['aspectRatio']),
             'tools' => $tools === [] ? self::AVAILABLE_TOOLS : $tools,
+            'modes' => $modes === [] ? self::AVAILABLE_MODES : $modes,
             // The presets offered in the native screen's selector (switchable live).
             // Pass `presets => []` to hide the selector and lock the crop shape.
             'presets' => $this->resolvePresets($options['presets'] ?? array_keys(self::PRESETS)),

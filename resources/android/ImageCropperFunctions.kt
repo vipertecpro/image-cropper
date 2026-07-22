@@ -30,15 +30,15 @@ import android.util.Log
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -49,28 +49,36 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -79,6 +87,7 @@ import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import com.nativephp.mobile.bridge.BridgeFunction
 import com.nativephp.mobile.utils.NativeActionCoordinator
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -101,6 +110,7 @@ object ImageCropperFunctions {
         val shape: String,
         val aspectRatio: Float,
         val tools: List<String>,
+        val modes: List<String>,
         val presets: List<CropPreset>,
         val outputSize: Int,
         val id: String?,
@@ -124,13 +134,12 @@ object ImageCropperFunctions {
                 path = parameters["path"] as? String ?: "",
                 shape = if ((parameters["shape"] as? String) == "circle") "circle" else "rect",
                 aspectRatio = ((parameters["aspectRatio"] as? Number)?.toFloat() ?: 1f).let { if (it > 0f) it else 1f },
-                tools = (parameters["tools"] as? List<*>)?.mapNotNull { it as? String }
-                    ?.filter { it == "zoom" || it == "rotate" } ?: listOf("zoom", "rotate"),
-                presets = (parameters["presets"] as? List<*>)?.mapNotNull { it as? Map<*, *> }?.map {
-                    CropPreset(it["key"] as? String ?: "", it["label"] as? String ?: "",
-                        if ((it["shape"] as? String) == "circle") "circle" else "rect",
-                        ((it["aspectRatio"] as? Number)?.toFloat() ?: 1f).coerceAtLeast(0.01f))
-                } ?: emptyList(),
+                tools = parseStringList(parameters["tools"])
+                    .filter { it == "zoom" || it == "rotate" }.ifEmpty { listOf("zoom", "rotate") },
+                modes = parseStringList(parameters["modes"])
+                    .filter { it == "crop" || it == "adjust" || it == "filter" }
+                    .ifEmpty { listOf("crop", "adjust", "filter") },
+                presets = parsePresets(parameters["presets"]),
                 outputSize = (parameters["outputSize"] as? Number)?.toInt() ?: 1024,
                 id = parameters["id"] as? String,
             )
@@ -147,8 +156,14 @@ object ImageCropperFunctions {
         private fun present(config: CropConfig) {
             val bitmap = loadUprightBitmap(config.path) ?: run { dispatch(EVENT_CANCELLED, config.id); return }
             val root = activity.findViewById<ViewGroup>(android.R.id.content)
+            val night = (activity.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
             val view = ComposeView(activity).apply {
                 layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                // Opaque, theme-aware overlay — otherwise the picked image behind us
+                // shows through the editor (iOS: host.view.backgroundColor = systemBackground).
+                setBackgroundColor(if (night) 0xFF0B0B0C.toInt() else 0xFFF4F4F5.toInt())
+                isClickable = true // swallow touches so they don't reach the screen underneath
             }
             fun teardown() { (view.parent as? ViewGroup)?.removeView(view) }
             view.setContent {
@@ -233,109 +248,141 @@ private fun EditorScreen(
     var brightness by remember { mutableStateOf(0f) }
     var contrast by remember { mutableStateOf(0f) }
     var saturation by remember { mutableStateOf(0f) }
-    var mode by remember { mutableStateOf("crop") }
+    var mode by remember { mutableStateOf(config.modes.firstOrNull() ?: "crop") }
     var cropSub by remember { mutableStateOf(config.tools.firstOrNull() ?: "zoom") }
     var adjustSub by remember { mutableStateOf("brightness") }
-    var showOriginal by remember { mutableStateOf(false) } // press-and-hold to compare
 
     val edited = scale != 1f || rotationDeg != 0f || offset != Offset.Zero ||
         brightness != 0f || contrast != 0f || saturation != 0f
     val circle = shape == "circle"
+    // Crop can be turned off entirely (adjust/filter-only): then we show the WHOLE
+    // image, no crop frame or gestures, and export the full photo with colour baked.
+    val cropEnabled = "crop" in config.modes
+    val surface = surfaceColor()
+    val onSurface = onSurfaceColor()
+    val filterThumb = remember(bitmap) { bitmap.asImageBitmap() }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-        val cw = constraints.maxWidth.toFloat()
-        val stageH = constraints.maxHeight.toFloat() * 0.60f
-        val side = min(cw, stageH) * 0.92f
-        val vpW = if (aspectRatio >= 1f) side else side * aspectRatio
-        val vpH = if (aspectRatio >= 1f) side / aspectRatio else side
-        val left = (cw - vpW) / 2f
-        val top = (stageH - vpH) / 2f
-        // COVER the crop frame at user-scale 1 (never black inside).
-        val coverScale = kotlin.math.max(vpW / bitmap.width, vpH / bitmap.height)
-        val displayW = bitmap.width * coverScale
-        val displayH = bitmap.height * coverScale
-        val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-            colorFilter = ColorMatrixColorFilter(colourMatrix(
-                if (showOriginal) 0f else brightness,
-                if (showOriginal) 0f else contrast,
-                if (showOriginal) 0f else saturation))
-        }
+    BoxWithConstraints(Modifier.fillMaxSize().background(surface)) {
+        // Hoisted geometry so the Done button (below the stage) can build CropState.
+        var geomCover by remember { mutableStateOf(1f) }
+        var geomVpW by remember { mutableStateOf(1f) }
+        var geomVpH by remember { mutableStateOf(1f) }
 
-        Column(Modifier.fillMaxSize()) {
-            // ---- Image stage ----
-            Box(Modifier.fillMaxWidth().height(with(androidx.compose.ui.platform.LocalDensity.current) { stageH.toDp() })) {
-                Canvas(Modifier.fillMaxSize().pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, rot ->
-                        scale = (scale * zoom).coerceIn(1f, 8f)
-                        rotationDeg += rot
-                        offset = clampOffset(
-                            offset + pan, displayW * scale, displayH * scale, rotationDeg, vpW, vpH
-                        )
+        Column(Modifier.fillMaxSize().systemBarsPadding()) {
+            // ---- Title bar: back button + dynamic mode title ----
+            Box(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp)) {
+                Box(
+                    Modifier.align(Alignment.CenterStart).size(40.dp).clickable { onCancel(edited) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(Modifier.size(22.dp)) {
+                        val sw = size.width * 0.11f
+                        drawLine(onSurface, Offset(size.width * 0.6f, size.height * 0.22f),
+                            Offset(size.width * 0.34f, size.height * 0.5f), sw, StrokeCap.Round)
+                        drawLine(onSurface, Offset(size.width * 0.34f, size.height * 0.5f),
+                            Offset(size.width * 0.6f, size.height * 0.78f), sw, StrokeCap.Round)
                     }
-                }) {
+                }
+                BasicText(
+                    when (mode) { "adjust" -> "Adjust"; "filter" -> "Filter"; else -> "Crop" },
+                    Modifier.align(Alignment.Center),
+                    style = TextStyle(color = onSurface, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                )
+            }
+
+            // ---- Image stage: fills the space between the title bar and the controls.
+            // clipToBounds is ESSENTIAL: Compose draws do NOT clip to layout bounds, so a
+            // zoomed image would otherwise paint over the controls below it.
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
+                val cw = constraints.maxWidth.toFloat()
+                val stageH = constraints.maxHeight.toFloat()
+                val side = min(cw, stageH) * 0.92f
+                val vpW = if (aspectRatio >= 1f) side else side * aspectRatio
+                val vpH = if (aspectRatio >= 1f) side / aspectRatio else side
+                val left = (cw - vpW) / 2f
+                val top = (stageH - vpH) / 2f
+                // COVER the crop frame at user-scale 1 (never black inside).
+                val coverScale = kotlin.math.max(vpW / bitmap.width, vpH / bitmap.height)
+                val displayW = bitmap.width * coverScale
+                val displayH = bitmap.height * coverScale
+                SideEffect { geomCover = coverScale; geomVpW = vpW; geomVpH = vpH }
+                // FIT the whole image when crop is off; COVER the frame when it's on.
+                val fitScale = min((cw * 0.92f) / bitmap.width, (stageH * 0.92f) / bitmap.height)
+                val gestureMod = if (cropEnabled) {
+                    Modifier.pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, rot ->
+                            scale = (scale * zoom).coerceIn(1f, 8f)
+                            rotationDeg += rot
+                            offset = clampOffset(offset + pan, displayW * scale, displayH * scale, rotationDeg, vpW, vpH)
+                        }
+                    }
+                } else {
+                    Modifier
+                }
+                Canvas(Modifier.fillMaxSize().then(gestureMod)) {
+                    // Build the paint HERE so the draw reads brightness/contrast/saturation
+                    // as snapshot state → the Canvas auto-invalidates on live colour changes.
+                    val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                        colorFilter = ColorMatrixColorFilter(colourMatrix(brightness, contrast, saturation))
+                    }
+                    val drawScale = if (cropEnabled) scale * coverScale else fitScale
+                    val drawRot = if (cropEnabled) rotationDeg else 0f
+                    val dx = if (cropEnabled) offset.x else 0f
+                    val dy = if (cropEnabled) offset.y else 0f
                     drawContext.canvas.nativeCanvas.drawBitmap(
                         bitmap,
                         buildMatrix(bitmap.width.toFloat(), bitmap.height.toFloat(),
-                            scale * coverScale, rotationDeg, cw / 2f + offset.x, stageH / 2f + offset.y),
+                            drawScale, drawRot, cw / 2f + dx, stageH / 2f + dy),
                         paint
                     )
                 }
-                Canvas(Modifier.fillMaxSize()) {
-                    val rect = Rect(left, top, left + vpW, top + vpH)
-                    val dim = Path().apply {
-                        addRect(Rect(0f, 0f, cw, size.height))
-                        if (circle) addOval(rect) else addRect(rect); fillType = PathFillType.EvenOdd
-                    }
-                    drawPath(dim, Color.Black.copy(alpha = 0.55f))
-                    val clip = Path().apply { if (circle) addOval(rect) else addRect(rect) }
-                    clipPath(clip) {
-                        for (i in 1..2) {
-                            val x = left + vpW * i / 3f
-                            drawLine(Color.White.copy(alpha = 0.4f), Offset(x, top), Offset(x, top + vpH))
-                            val y = top + vpH * i / 3f
-                            drawLine(Color.White.copy(alpha = 0.4f), Offset(left, y), Offset(left + vpW, y))
+                if (cropEnabled) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val rect = Rect(left, top, left + vpW, top + vpH)
+                        val dim = Path().apply {
+                            addRect(Rect(0f, 0f, cw, size.height))
+                            if (circle) addOval(rect) else addRect(rect); fillType = PathFillType.EvenOdd
                         }
-                    }
-                    if (circle) drawCircle(Color.White, vpW / 2f, Offset(rect.center.x, rect.center.y), style = Stroke(2f))
-                    else drawRect(Color.White, Offset(left, top), Size(vpW, vpH), style = Stroke(2f))
-                }
-
-                // Press-and-hold to compare against the original colours.
-                Box(
-                    Modifier.align(Alignment.TopEnd).padding(12.dp)
-                        .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                        .pointerInput(Unit) {
-                            awaitEachGesture {
-                                awaitFirstDown(requireUnconsumed = false)
-                                showOriginal = true
-                                waitForUpOrCancellation()
-                                showOriginal = false
+                        drawPath(dim, Color.Black.copy(alpha = 0.55f))
+                        val clip = Path().apply { if (circle) addOval(rect) else addRect(rect) }
+                        clipPath(clip) {
+                            for (i in 1..2) {
+                                val x = left + vpW * i / 3f
+                                drawLine(Color.White.copy(alpha = 0.4f), Offset(x, top), Offset(x, top + vpH))
+                                val y = top + vpH * i / 3f
+                                drawLine(Color.White.copy(alpha = 0.4f), Offset(left, y), Offset(left + vpW, y))
                             }
                         }
-                ) {
-                    BasicText(if (showOriginal) "Original" else "Compare",
-                        style = TextStyle(color = Color.White, fontSize = 12.sp))
+                        if (circle) drawCircle(Color.White, vpW / 2f, Offset(rect.center.x, rect.center.y), style = Stroke(2f))
+                        else drawRect(Color.White, Offset(left, top), Size(vpW, vpH), style = Stroke(2f))
+                    }
                 }
             }
 
-            // ---- Bottom controls ----
+            // ---- Bottom controls (wrap content; the image stage above takes the slack) ----
             Column(
-                Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 6.dp, bottom = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (mode == "crop" && config.presets.isNotEmpty()) {
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         config.presets.forEach { p ->
                             val on = p.shape == shape && abs(p.aspectRatio - aspectRatio) < 0.001f
-                            BasicText(p.label, Modifier.clickable {
-                                // Switch frame AND re-centre/re-cover the image.
-                                shape = p.shape; aspectRatio = p.aspectRatio
-                                scale = 1f; offset = Offset.Zero; rotationDeg = 0f
-                            },
-                                style = TextStyle(color = if (on) Color(0xFF34C759) else Color.White.copy(alpha = 0.6f),
-                                    fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal))
+                            Column(
+                                Modifier.clickable {
+                                    // Switch frame AND re-centre/re-cover the image.
+                                    shape = p.shape; aspectRatio = p.aspectRatio
+                                    scale = 1f; offset = Offset.Zero; rotationDeg = 0f
+                                },
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                PresetIcon(p.shape == "circle", on)
+                                BasicText(p.label,
+                                    style = TextStyle(color = if (on) Color(0xFF34C759) else onSurface.copy(alpha = 0.6f),
+                                        fontSize = 12.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal))
+                            }
                         }
                     }
                 }
@@ -344,16 +391,28 @@ private fun EditorScreen(
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                         ImageCropperFunctions.filters.forEach { f ->
                             val on = brightness == f.brightness && contrast == f.contrast && saturation == f.saturation
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Canvas(Modifier.size(64.dp)) {
-                                    val p = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(colourMatrix(f.brightness, f.contrast, f.saturation)) }
-                                    val s = min(size.width / bitmap.width, size.height / bitmap.height)
-                                    drawContext.canvas.nativeCanvas.drawBitmap(bitmap,
-                                        buildMatrix(bitmap.width.toFloat(), bitmap.height.toFloat(), s * 1.4f, 0f, size.width / 2f, size.height / 2f), p)
-                                    drawRect(if (on) Color(0xFF34C759) else Color.White.copy(alpha = 0.2f), style = Stroke(if (on) 4f else 2f))
-                                }
-                                BasicText(f.name, Modifier.clickable { brightness = f.brightness; contrast = f.contrast; saturation = f.saturation },
-                                    style = TextStyle(color = if (on) Color(0xFF34C759) else Color.White.copy(alpha = 0.7f), fontSize = 11.sp))
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.clickable { brightness = f.brightness; contrast = f.contrast; saturation = f.saturation }
+                            ) {
+                                Image(
+                                    bitmap = filterThumb,
+                                    contentDescription = f.name,
+                                    contentScale = ContentScale.Crop,
+                                    colorFilter = ColorFilter.colorMatrix(
+                                        androidx.compose.ui.graphics.ColorMatrix(
+                                            colourMatrix(f.brightness, f.contrast, f.saturation).array)),
+                                    modifier = Modifier.size(60.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .border(
+                                            if (on) 2.dp else 1.dp,
+                                            if (on) Color(0xFF34C759) else onSurface.copy(alpha = 0.25f),
+                                            RoundedCornerShape(10.dp)
+                                        )
+                                )
+                                BasicText(f.name,
+                                    style = TextStyle(color = if (on) Color(0xFF34C759) else onSurface.copy(alpha = 0.7f), fontSize = 11.sp))
                             }
                         }
                     }
@@ -366,7 +425,7 @@ private fun EditorScreen(
                         items.forEach { (key, label) ->
                             val on = active == key
                             BasicText(label, Modifier.clickable { if (mode == "crop") cropSub = key else adjustSub = key },
-                                style = TextStyle(color = if (on) Color.White else Color.White.copy(alpha = 0.45f),
+                                style = TextStyle(color = if (on) onSurface else onSurface.copy(alpha = 0.45f),
                                     fontSize = 14.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal))
                         }
                     }
@@ -382,16 +441,19 @@ private fun EditorScreen(
 
                 // Row 3 — Cancel | modes | Done
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    BasicText("Cancel", Modifier.clickable { onCancel(edited) }, style = TextStyle(color = Color.White, fontSize = 15.sp))
+                    BasicText("Cancel", Modifier.clickable { onCancel(edited) }, style = TextStyle(color = onSurface, fontSize = 15.sp))
                     Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            ModeTab("Crop", mode == "crop") { mode = "crop" }
-                            ModeTab("Adjust", mode == "adjust") { mode = "adjust" }
-                            ModeTab("Filter", mode == "filter") { mode = "filter" }
+                        // Only show the mode switcher when more than one mode is enabled.
+                        if (config.modes.size > 1) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                                if ("crop" in config.modes) ModeIcon("crop", mode == "crop") { mode = "crop" }
+                                if ("adjust" in config.modes) ModeIcon("adjust", mode == "adjust") { mode = "adjust" }
+                                if ("filter" in config.modes) ModeIcon("filter", mode == "filter") { mode = "filter" }
+                            }
                         }
                     }
                     BasicText("Done", Modifier.clickable {
-                        onDone(CropState(scale, rotationDeg, offset, coverScale, vpW, vpH, shape, aspectRatio, brightness, contrast, saturation))
+                        onDone(CropState(scale, rotationDeg, offset, geomCover, geomVpW, geomVpH, shape, aspectRatio, brightness, contrast, saturation))
                     }, style = TextStyle(color = Color(0xFFEA7A3B), fontSize = 15.sp, fontWeight = FontWeight.Bold))
                 }
             }
@@ -399,19 +461,102 @@ private fun EditorScreen(
     }
 }
 
+/**
+ * Mode button matching iOS: an icon in a circle. Active = filled white circle
+ * with a black icon; inactive = transparent with a translucent-white icon.
+ * Icons are drawn with Canvas primitives so the plugin needs no icon library.
+ */
 @Composable
-private fun ModeTab(label: String, on: Boolean, onClick: () -> Unit) {
+private fun ModeIcon(kind: String, active: Boolean, onClick: () -> Unit) {
+    val onSurface = onSurfaceColor()
+    val surface = surfaceColor()
+    val fg = if (active) surface else onSurface.copy(alpha = 0.75f)
     Box(
-        Modifier.background(if (on) Color.White else Color.Transparent, CircleShape).clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+        Modifier.size(40.dp)
+            .background(if (active) onSurface else Color.Transparent, CircleShape)
+            .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
-        BasicText(label, style = TextStyle(color = if (on) Color.Black else Color.White.copy(alpha = 0.7f), fontSize = 13.sp,
-            fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal))
+        Canvas(Modifier.size(22.dp)) {
+            val w = size.width
+            val h = size.height
+            val sw = w * 0.09f
+            when (kind) {
+                "crop" -> drawRoundRect(fg, topLeft = Offset(w * 0.15f, h * 0.15f),
+                    size = Size(w * 0.7f, h * 0.7f), cornerRadius = CornerRadius(w * 0.12f, w * 0.12f),
+                    style = Stroke(sw))
+                "adjust" -> {
+                    val ys = listOf(0.25f, 0.5f, 0.75f)
+                    val knob = listOf(0.66f, 0.34f, 0.58f)
+                    ys.forEachIndexed { i, yf ->
+                        val y = h * yf
+                        drawLine(fg, Offset(w * 0.12f, y), Offset(w * 0.88f, y), strokeWidth = sw, cap = StrokeCap.Round)
+                        drawCircle(fg, radius = w * 0.09f, center = Offset(w * knob[i], y))
+                    }
+                }
+                else -> { // filter — three overlapping circles
+                    val r = w * 0.22f
+                    drawCircle(fg, r, Offset(w * 0.38f, h * 0.42f), style = Stroke(sw))
+                    drawCircle(fg, r, Offset(w * 0.62f, h * 0.42f), style = Stroke(sw))
+                    drawCircle(fg, r, Offset(w * 0.5f, h * 0.63f), style = Stroke(sw))
+                }
+            }
+        }
+    }
+}
+
+/** Small crop-shape glyph shown above each preset label (circle vs rounded rect). */
+@Composable
+private fun PresetIcon(circle: Boolean, on: Boolean) {
+    val onSurface = onSurfaceColor()
+    val c = if (on) Color(0xFF34C759) else onSurface.copy(alpha = 0.6f)
+    Canvas(Modifier.size(22.dp)) {
+        val w = size.width
+        val sw = w * 0.09f
+        if (circle) {
+            drawCircle(c, radius = w * 0.4f, style = Stroke(sw))
+        } else {
+            drawRoundRect(c, topLeft = Offset(w * 0.13f, w * 0.22f), size = Size(w * 0.74f, w * 0.56f),
+                cornerRadius = CornerRadius(w * 0.1f, w * 0.1f), style = Stroke(sw))
+        }
     }
 }
 
 private fun sign(v: Float): String = "${if (v > 0) "+" else ""}${v.toInt()}"
+
+/**
+ * The Android bridge leaves nested JSON arrays as [org.json.JSONArray] (not a Kotlin
+ * List) — so a plain `as? List<*>` cast silently yields null. These helpers accept
+ * BOTH shapes so the config's `tools` / `presets` parse on every bridge implementation.
+ */
+private fun parseStringList(any: Any?): List<String> = when (any) {
+    is List<*> -> any.mapNotNull { it as? String }
+    is JSONArray -> (0 until any.length()).mapNotNull { i -> any.optString(i).takeIf { it.isNotEmpty() } }
+    else -> emptyList()
+}
+
+private fun parsePresets(any: Any?): List<ImageCropperFunctions.CropPreset> = when (any) {
+    is List<*> -> any.mapNotNull { it as? Map<*, *> }.map { m ->
+        ImageCropperFunctions.CropPreset(
+            m["key"] as? String ?: "", m["label"] as? String ?: "",
+            if ((m["shape"] as? String) == "circle") "circle" else "rect",
+            ((m["aspectRatio"] as? Number)?.toFloat() ?: 1f).coerceAtLeast(0.01f))
+    }
+    is JSONArray -> (0 until any.length()).mapNotNull { any.optJSONObject(it) }.map { jo ->
+        ImageCropperFunctions.CropPreset(
+            jo.optString("key"), jo.optString("label"),
+            if (jo.optString("shape") == "circle") "circle" else "rect",
+            jo.optDouble("aspectRatio", 1.0).toFloat().coerceAtLeast(0.01f))
+    }
+    else -> emptyList()
+}
+
+/** Theme-adaptive colours that follow the system light/dark setting. */
+@Composable
+private fun surfaceColor(): Color = if (isSystemInDarkTheme()) Color(0xFF0B0B0C) else Color(0xFFF4F4F5)
+
+@Composable
+private fun onSurfaceColor(): Color = if (isSystemInDarkTheme()) Color.White else Color(0xFF17171A)
 
 /**
  * Keep the image covering the (axis-aligned) crop viewport at ANY rotation.
@@ -441,6 +586,7 @@ private fun clampOffset(o: Offset, w: Float, h: Float, rotDeg: Float, vpW: Float
 private fun Ruler(value: Float, range: ClosedFloatingPointRange<Float>, display: String, onChange: (Float) -> Unit) {
     val span = range.endInclusive - range.start
     val fraction = if (span == 0f) 0.5f else ((value - range.start) / span).coerceIn(0f, 1f)
+    val onSurface = onSurfaceColor()
     fun clamp(v: Float) = v.coerceIn(range.start, range.endInclusive)
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -456,7 +602,7 @@ private fun Ruler(value: Float, range: ClosedFloatingPointRange<Float>, display:
                     val n = 40; val gap = size.width / (n - 1)
                     for (i in 0 until n) {
                         val f = i / (n - 1f); val h = if (i % 5 == 0) 20.dp.toPx() else 11.dp.toPx()
-                        drawLine(if (f <= fraction) Color(0xFF34C759) else Color.White.copy(alpha = 0.25f),
+                        drawLine(if (f <= fraction) Color(0xFF34C759) else onSurface.copy(alpha = 0.25f),
                             Offset(i * gap, center.y - h / 2), Offset(i * gap, center.y + h / 2), 2.dp.toPx(), StrokeCap.Round)
                     }
                 }
@@ -468,8 +614,9 @@ private fun Ruler(value: Float, range: ClosedFloatingPointRange<Float>, display:
 
 @Composable
 private fun StepButton(label: String, onClick: () -> Unit) {
-    Box(Modifier.size(34.dp).background(Color.White.copy(alpha = 0.08f), CircleShape).clickable { onClick() }, contentAlignment = Alignment.Center) {
-        BasicText(label, style = TextStyle(color = Color.White.copy(alpha = 0.85f), fontSize = 20.sp))
+    val onSurface = onSurfaceColor()
+    Box(Modifier.size(34.dp).background(onSurface.copy(alpha = 0.08f), CircleShape).clickable { onClick() }, contentAlignment = Alignment.Center) {
+        BasicText(label, style = TextStyle(color = onSurface.copy(alpha = 0.85f), fontSize = 20.sp))
     }
 }
 
@@ -481,6 +628,24 @@ private fun buildMatrix(bmpW: Float, bmpH: Float, combinedScale: Float, rotation
 
 object CropRenderer {
     fun render(context: android.content.Context, bitmap: Bitmap, state: CropState, config: ImageCropperFunctions.CropConfig): String? {
+        // No crop mode → export the WHOLE image (longest edge = outputSize) + colour.
+        if ("crop" !in config.modes) {
+            val s = config.outputSize.toFloat() / kotlin.math.max(bitmap.width, bitmap.height)
+            val fw = (bitmap.width * s).toInt().coerceAtLeast(1)
+            val fh = (bitmap.height * s).toInt().coerceAtLeast(1)
+            val full = Bitmap.createBitmap(fw, fh, Bitmap.Config.ARGB_8888)
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
+                colorFilter = ColorMatrixColorFilter(colourMatrix(state.brightness, state.contrast, state.saturation))
+            }
+            android.graphics.Canvas(full).drawBitmap(bitmap,
+                buildMatrix(bitmap.width.toFloat(), bitmap.height.toFloat(), s, 0f, fw / 2f, fh / 2f), paint)
+            return try {
+                val file = File(context.cacheDir, "cropped_${System.currentTimeMillis()}.jpg")
+                FileOutputStream(file).use { out -> full.compress(Bitmap.CompressFormat.JPEG, 92, out) }
+                file.absolutePath
+            } catch (e: Exception) { null } finally { full.recycle() }
+        }
+
         val ratio = state.aspectRatio
         val outW: Int; val outH: Int
         if (ratio >= 1f) { outW = config.outputSize; outH = (config.outputSize / ratio).toInt() }

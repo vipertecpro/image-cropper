@@ -15,6 +15,9 @@
         "php": "^8.2",
         "nativephp/mobile": "^3.0|^4.0"
     },
+    "suggest": {
+        "nativephp/mobile-camera": "One convenient way to capture or pick an image to feed to ImageCropper::open() — any source of an image file path works."
+    },
     "autoload": {
         "psr-4": {
             "Vipertecpro\\ImageCropper\\": "src/"
