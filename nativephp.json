@@ -1,0 +1,68 @@
+{
+    "name": "vipertecpro/image-cropper",
+    "version": "1.0.0",
+    "description": "A fully native, hand-written freehand image cropper for NativePHP Mobile — drag, pinch-zoom and rotate the image behind a crop frame, then get a real cropped file back. No third-party libraries.",
+    "namespace": "ImageCropper",
+    "keywords": ["image", "crop", "cropper", "photo", "editor", "avatar"],
+    "category": "utilities",
+    "license": "MIT",
+    "pricing": {
+        "type": "free"
+    },
+    "author": {
+        "name": "vipertecpro",
+        "email": "vipertecpro@gmail.com",
+        "url": "https://github.com/vipertecpro"
+    },
+    "homepage": "https://github.com/vipertecpro/image-cropper",
+    "repository": "https://github.com/vipertecpro/image-cropper",
+    "funding": [],
+    "platforms": [
+        "android",
+        "ios"
+    ],
+    "icon": "resources/icon.png",
+    "screenshots": [],
+    "bridge_functions": [
+        {
+            "name": "ImageCropper.Open",
+            "android": "com.vipertecpro.plugins.image_cropper.ImageCropperFunctions.Open",
+            "ios": "ImageCropperFunctions.Open",
+            "description": "Open the native crop screen for an image and return a cropped file via an event"
+        }
+    ],
+    "android": {
+        "min_version": 26,
+        "permissions": [],
+        "repositories": [],
+        "dependencies": {
+            "implementation": []
+        },
+        "activities": [],
+        "services": [],
+        "receivers": [],
+        "providers": []
+    },
+    "ios": {
+        "min_version": "15.0",
+        "permissions": [],
+        "repositories": [],
+        "dependencies": {
+            "swift_packages": [],
+            "pods": []
+        }
+    },
+    "assets": {
+        "android": [],
+        "ios": []
+    },
+    "secrets": [],
+    "events": [
+        "Vipertecpro\\ImageCropper\\Events\\ImageCropped",
+        "Vipertecpro\\ImageCropper\\Events\\CropCancelled"
+    ],
+    "service_provider": "Vipertecpro\\ImageCropper\\ImageCropperServiceProvider",
+    "hooks": {
+        "copy_assets": "nativephp:image-cropper:copy-assets"
+    }
+}
