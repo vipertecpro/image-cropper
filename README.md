@@ -325,6 +325,10 @@ first build as a calibration pass:
   images consider downsampling on decode.
 - Report anything off and it's a small, localized fix in the two renderer functions.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full version history and per-release notes.
+
 ## License
 
 MIT
