@@ -1,6 +1,6 @@
 {
     "name": "vipertecpro/image-cropper",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "A fully native, hand-written freehand image cropper for NativePHP Mobile — drag, pinch-zoom and rotate the image behind a crop frame, then get a real cropped file back. No third-party libraries.",
     "namespace": "ImageCropper",
     "keywords": ["image", "crop", "cropper", "photo", "editor", "avatar"],
