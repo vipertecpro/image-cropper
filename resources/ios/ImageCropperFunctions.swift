@@ -141,6 +141,9 @@ final class ImageCropperPresenter {
     private var hosting: UIHostingController<AnyView>?
     private var finished = false
     private var downloadTask: URLSessionDownloadTask?
+    /// Bumped on every present(); a download completion from an OLDER session
+    /// (e.g. one the user cancelled) must never touch the current session.
+    private var session = 0
 
     /// Remote images larger than this are rejected before decoding.
     private static let maxDownloadBytes: Int64 = 64 * 1024 * 1024
@@ -155,6 +158,7 @@ final class ImageCropperPresenter {
             // Remote source: present a themed loading screen immediately (with
             // Cancel), download natively, then swap in the editor.
             finished = false
+            session += 1
             let host = makeHost(config: config)
             host.rootView = AnyView(DownloadingView(theme: config.theme) { [weak self] in
                 self?.downloadTask?.cancel()
@@ -222,6 +226,7 @@ final class ImageCropperPresenter {
         guard let url = URL(string: config.path) else {
             finish(CropEvents.cancelled, ["id": config.id as Any]); return
         }
+        let mySession = session
         let sessionConfig = URLSessionConfiguration.ephemeral
         sessionConfig.timeoutIntervalForRequest = 30
         sessionConfig.timeoutIntervalForResource = 120
@@ -241,7 +246,7 @@ final class ImageCropperPresenter {
                 }
             }
             DispatchQueue.main.async {
-                guard let self, !self.finished else {
+                guard let self, self.session == mySession, !self.finished else {
                     if let stableURL { try? FileManager.default.removeItem(at: stableURL) }
                     return
                 }
