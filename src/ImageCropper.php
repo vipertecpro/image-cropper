@@ -68,6 +68,18 @@ class ImageCropper
     public const AVAILABLE_MODES = ['crop', 'adjust', 'filter'];
 
     /**
+     * Theme keys the editor accepts, all optional hex colors (#RGB / #RRGGBB /
+     * #RRGGBBAA). Any key omitted falls back to the editor's built-in
+     * system-adaptive light/dark default — pass only what you want to override.
+     *
+     *  - background: editor screen background
+     *  - text:       titles, labels and inactive icons
+     *  - accent:     the Done button
+     *  - highlight:  active states (selected preset/filter, ruler value & fill)
+     */
+    public const THEME_KEYS = ['background', 'text', 'accent', 'highlight'];
+
+    /**
      * Open the native crop screen.
      *
      * @param  string  $path  Absolute path to the source image (jpg/png).
@@ -79,6 +91,7 @@ class ImageCropper
      *     modes?: list<string>,
      *     presets?: list<string>,
      *     outputSize?: int,
+     *     theme?: array<string, string>,
      *     id?: string|null
      * }  $options  Crop configuration. `preset` sets shape+ratio; explicit
      *              `shape`/`aspectRatio` override it. `tools` picks which crop
@@ -86,6 +99,9 @@ class ImageCropper
      *              editor modes are available (crop/adjust/filter) — pass
      *              `['crop']` for a bare cropper. `presets` is the list of
      *              switchable presets offered in-screen (`[]` locks the crop).
+     *              `theme` recolours the editor to match YOUR app (see
+     *              {@see THEME_KEYS}) — omitted keys keep the system-adaptive
+     *              defaults.
      *
      * Fires {@see ImageCropped} on success and
      * {@see CropCancelled} on cancel.
@@ -129,8 +145,32 @@ class ImageCropper
             // Pass `presets => []` to hide the selector and lock the crop shape.
             'presets' => $this->resolvePresets($options['presets'] ?? array_keys(self::PRESETS)),
             'outputSize' => (int) ($options['outputSize'] ?? 1024),
+            'theme' => $this->resolveTheme($options['theme'] ?? []),
             'id' => $options['id'] ?? null,
         ];
+    }
+
+    /**
+     * Keep only known theme keys holding valid hex colors, normalised with a
+     * leading '#'. Unknown keys and malformed values are dropped — the native
+     * side falls back to its adaptive default for anything missing.
+     *
+     * @param  array<string, string>  $theme
+     * @return array<string, string>
+     */
+    protected function resolveTheme(array $theme): array
+    {
+        $clean = [];
+
+        foreach (self::THEME_KEYS as $key) {
+            $value = $theme[$key] ?? null;
+
+            if (is_string($value) && preg_match('/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/', $value, $m)) {
+                $clean[$key] = '#'.$m[1];
+            }
+        }
+
+        return $clean;
     }
 
     /**

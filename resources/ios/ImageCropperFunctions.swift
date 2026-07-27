@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import SwiftUI
 import CoreImage
+import ImageIO
 
 // =============================================================================
 // ImageCropper — iOS native image editor
@@ -40,6 +41,46 @@ struct CropPreset: Identifiable {
     var id: String { key }
 }
 
+/// Host-app theme overrides. Every color is optional: `nil` falls back to the
+/// editor's built-in system-adaptive default, so the editor blends into ANY
+/// app — the host decides, not the plugin.
+struct CropTheme {
+    let background: UIColor?   // editor screen background
+    let text: UIColor?         // titles, labels, inactive icons
+    let accent: UIColor?       // the Done button
+    let highlight: UIColor?    // active states (selection, ruler value/fill)
+
+    init(_ p: [String: Any]?) {
+        background = UIColor(hex: p?["background"] as? String)
+        text = UIColor(hex: p?["text"] as? String)
+        accent = UIColor(hex: p?["accent"] as? String)
+        highlight = UIColor(hex: p?["highlight"] as? String)
+    }
+
+    // Resolved SwiftUI colors with the classic defaults.
+    var backgroundColor: Color { background.map(Color.init) ?? Color(.systemBackground) }
+    var textColor: Color { text.map(Color.init) ?? .primary }
+    var accentColor: Color { accent.map(Color.init) ?? Color(red: 0.92, green: 0.47, blue: 0.18) }
+    var highlightColor: Color { highlight.map(Color.init) ?? .green }
+}
+
+extension UIColor {
+    /// #RGB / #RRGGBB / #RRGGBBAA (leading '#' optional). Returns nil on junk.
+    convenience init?(hex: String?) {
+        guard var s = hex?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
+        if s.hasPrefix("#") { s.removeFirst() }
+        if s.count == 3 { s = s.map { "\($0)\($0)" }.joined() }
+        guard s.count == 6 || s.count == 8, let v = UInt64(s, radix: 16) else { return nil }
+        let hasAlpha = s.count == 8
+        let divisor: CGFloat = 255
+        let r = CGFloat((v >> (hasAlpha ? 24 : 16)) & 0xFF) / divisor
+        let g = CGFloat((v >> (hasAlpha ? 16 : 8)) & 0xFF) / divisor
+        let b = CGFloat((v >> (hasAlpha ? 8 : 0)) & 0xFF) / divisor
+        let a = hasAlpha ? CGFloat(v & 0xFF) / divisor : 1
+        self.init(red: r, green: g, blue: b, alpha: a)
+    }
+}
+
 struct CropConfig {
     let path: String
     let shape: String
@@ -48,6 +89,7 @@ struct CropConfig {
     let modes: [String]
     let presets: [CropPreset]
     let outputSize: Int
+    let theme: CropTheme
     let id: String?
 
     init(_ p: [String: Any]) {
@@ -59,6 +101,7 @@ struct CropConfig {
         let requested = (p["modes"] as? [String])?.filter { ["crop", "adjust", "filter"].contains($0) } ?? []
         modes = requested.isEmpty ? ["crop", "adjust", "filter"] : requested
         outputSize = (p["outputSize"] as? NSNumber)?.intValue ?? 1024
+        theme = CropTheme(p["theme"] as? [String: Any])
         id = p["id"] as? String
         presets = ((p["presets"] as? [[String: Any]]) ?? []).map {
             CropPreset(key: $0["key"] as? String ?? "", label: $0["label"] as? String ?? "",
@@ -96,28 +139,39 @@ private enum CropEvents {
 final class ImageCropperPresenter {
     static let shared = ImageCropperPresenter()
     private var hosting: UIViewController?
+    private var finished = false
 
     func present(config: CropConfig) {
-        guard let image = UIImage(contentsOfFile: config.path) else {
-            fire(CropEvents.cancelled, ["id": config.id as Any]); return
+        // Re-entrancy guard: only one editor at a time. A second Open (e.g. a
+        // double-tap) is rejected with a cancel for its OWN id, so it can't
+        // orphan the live editor or lose an event.
+        guard hosting == nil else { send(CropEvents.cancelled, ["id": config.id as Any]); return }
+
+        // Downsample on decode: bounds memory (a full-res camera photo can spike
+        // and get the app jettisoned) and applies EXIF orientation up-front.
+        let maxPixel = min(4096, max(2048, config.outputSize * 2))
+        guard let image = Self.loadImage(path: config.path, maxPixel: maxPixel),
+              image.size.width > 0, image.size.height > 0 else {
+            send(CropEvents.cancelled, ["id": config.id as Any]); return
         }
+
+        finished = false
         let view = EditorView(
             image: image, config: config,
-            onCancel: { [weak self] in self?.dismiss(); self?.fire(CropEvents.cancelled, ["id": config.id as Any]) },
+            onCancel: { [weak self] in self?.finish(CropEvents.cancelled, ["id": config.id as Any]) },
             onDone: { [weak self] state in
                 DispatchQueue.global(qos: .userInitiated).async {
                     let out = CropRenderer.render(image: image, state: state, config: config)
                     DispatchQueue.main.async {
-                        self?.dismiss()
-                        if let path = out { self?.fire(CropEvents.cropped, ["path": path, "id": config.id as Any]) }
-                        else { self?.fire(CropEvents.cancelled, ["id": config.id as Any]) }
+                        if let path = out { self?.finish(CropEvents.cropped, ["path": path, "id": config.id as Any]) }
+                        else { self?.finish(CropEvents.cancelled, ["id": config.id as Any]) }
                     }
                 }
             }
         )
         let host = UIHostingController(rootView: view)
         host.modalPresentationStyle = .fullScreen
-        host.view.backgroundColor = .systemBackground
+        host.view.backgroundColor = config.theme.background ?? .systemBackground
         hosting = host
         // Present once the top view controller is idle. When Open is called right
         // after the gallery picker is dismissed, the picker is still mid-dismiss
@@ -127,7 +181,7 @@ final class ImageCropperPresenter {
 
     private func presentWhenReady(_ host: UIViewController, id: String?, attempts: Int) {
         guard let top = Self.top(), !top.isBeingDismissed, !top.isBeingPresented else {
-            guard attempts < 25 else { fire(CropEvents.cancelled, ["id": id as Any]); return }
+            guard attempts < 25 else { finish(CropEvents.cancelled, ["id": id as Any]); return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
                 self?.presentWhenReady(host, id: id, attempts: attempts + 1)
             }
@@ -137,10 +191,39 @@ final class ImageCropperPresenter {
     }
 
     private func dismiss() { hosting?.dismiss(animated: true); hosting = nil }
-    private func fire(_ event: String, _ payload: [String: Any]) {
+
+    /// Deliver EXACTLY ONE terminal event for the current editor, then tear it
+    /// down. Guards against a double-tap on Done (or Done racing Cancel) firing
+    /// two events for one session.
+    private func finish(_ event: String, _ payload: [String: Any]) {
+        guard !finished else { return }
+        finished = true
+        dismiss()
+        send(event, payload)
+    }
+
+    private func send(_ event: String, _ payload: [String: Any]) {
         var clean: [String: Any] = [:]
         for (k, v) in payload where !(v is NSNull) { clean[k] = v }
         LaravelBridge.shared.send?(event, clean)
+    }
+
+    /// Decode `path` downsampled so the longest edge is ~`maxPixel`, applying the
+    /// EXIF orientation. Bounds memory and normalises orientation in one step.
+    private static func loadImage(path: String, maxPixel: Int) -> UIImage? {
+        let url = URL(fileURLWithPath: path)
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return UIImage(contentsOfFile: path)
+        }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,   // bake EXIF orientation → .up
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
+            return UIImage(contentsOfFile: path)
+        }
+        return UIImage(cgImage: cg)
     }
     private static func top() -> UIViewController? {
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -190,7 +273,11 @@ private struct EditorView: View {
     @State private var showDiscard = false
     @State private var stageSize: CGSize = .zero // measured image-area size (drives Done geometry)
 
-    private let accent = Color(red: 0.92, green: 0.47, blue: 0.18)
+    // Host-app theme (each falls back to the classic adaptive default).
+    private var themeBg: Color { config.theme.backgroundColor }
+    private var tint: Color { config.theme.textColor }
+    private var accent: Color { config.theme.accentColor }
+    private var highlight: Color { config.theme.highlightColor }
 
     init(image: UIImage, config: CropConfig, onCancel: @escaping () -> Void, onDone: @escaping (CropState) -> Void) {
         self.image = image; self.config = config; self.onCancel = onCancel; self.onDone = onDone
@@ -212,12 +299,12 @@ private struct EditorView: View {
                     Button { edited ? (showDiscard = true) : onCancel() } label: {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.primary).frame(width: 40, height: 40)
+                            .foregroundColor(tint).frame(width: 40, height: 40)
                     }
                     Spacer()
                 }
                 Text(mode == "adjust" ? "Adjust" : (mode == "filter" ? "Filter" : "Crop"))
-                    .font(.system(size: 17, weight: .semibold)).foregroundColor(.primary)
+                    .font(.system(size: 17, weight: .semibold)).foregroundColor(tint)
             }
             .frame(height: 52).padding(.horizontal, 8)
 
@@ -295,7 +382,7 @@ private struct EditorView: View {
             }
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
         }
-        .background(Color(.systemBackground).ignoresSafeArea())
+        .background(themeBg.ignoresSafeArea())
         .alert("Discard Changes", isPresented: $showDiscard) {
             Button("Cancel", role: .cancel) {}
             Button("Discard", role: .destructive) { onCancel() }
@@ -316,12 +403,15 @@ private struct EditorView: View {
                     } label: {
                         VStack(spacing: 4) {
                             Image(systemName: p.shape == "circle" ? "person.crop.circle" : "crop")
-                                .foregroundColor(on ? .green : .primary.opacity(0.7))
-                            Text(p.label).font(.system(size: 11)).foregroundColor(on ? .green : .primary.opacity(0.6))
+                                .foregroundColor(on ? highlight : tint.opacity(0.7))
+                            Text(p.label).font(.system(size: 11)).foregroundColor(on ? highlight : tint.opacity(0.6))
                         }
                     }
                 }
-            }.padding(.horizontal, 4)
+            }
+            .padding(.horizontal, 4)
+            // Centre the strip when it fits; it still scrolls when it doesn't.
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -335,7 +425,7 @@ private struct EditorView: View {
             ForEach(items, id: \.0) { key, label in
                 Button(label) { if mode == "crop" { cropSub = key } else { adjustSub = key } }
                     .font(.system(size: 14, weight: active == key ? .semibold : .regular))
-                    .foregroundColor(active == key ? .primary : .primary.opacity(0.45))
+                    .foregroundColor(active == key ? tint : tint.opacity(0.45))
             }
         }
     }
@@ -344,15 +434,15 @@ private struct EditorView: View {
     @ViewBuilder
     private func ruler() -> some View {
         if mode == "crop" && cropSub == "zoom" {
-            RulerSlider(value: Double(scale), range: 1...8, display: String(format: "%.1fx", Double(scale))) { scale = CGFloat($0) }
+            RulerSlider(value: Double(scale), range: 1...8, display: String(format: "%.1fx", Double(scale)), tint: tint, highlight: highlight) { scale = CGFloat($0) }
         } else if mode == "crop" {
-            RulerSlider(value: rotationDeg, range: -180...180, display: "\(Int(rotationDeg.rounded()))°") { rotationDeg = $0 }
+            RulerSlider(value: rotationDeg, range: -180...180, display: "\(Int(rotationDeg.rounded()))°", tint: tint, highlight: highlight) { rotationDeg = $0 }
         } else if adjustSub == "brightness" {
-            RulerSlider(value: brightness, range: -100...100, display: label(brightness)) { brightness = $0 }
+            RulerSlider(value: brightness, range: -100...100, display: label(brightness), tint: tint, highlight: highlight) { brightness = $0 }
         } else if adjustSub == "contrast" {
-            RulerSlider(value: contrast, range: -100...100, display: label(contrast)) { contrast = $0 }
+            RulerSlider(value: contrast, range: -100...100, display: label(contrast), tint: tint, highlight: highlight) { contrast = $0 }
         } else {
-            RulerSlider(value: saturation, range: -100...100, display: label(saturation)) { saturation = $0 }
+            RulerSlider(value: saturation, range: -100...100, display: label(saturation), tint: tint, highlight: highlight) { saturation = $0 }
         }
     }
 
@@ -370,22 +460,38 @@ private struct EditorView: View {
                                 .brightness(f.brightness / 100 * 0.5).contrast(1 + f.contrast / 100)
                                 .saturation(max(0, 1 + f.saturation / 100))
                                 .overlay(RoundedRectangle(cornerRadius: 10)
-                                    .stroke(on ? Color.green : Color.primary.opacity(0.2), lineWidth: on ? 2 : 1))
-                            Text(f.name).font(.system(size: 11)).foregroundColor(on ? .green : .primary.opacity(0.7))
+                                    .stroke(on ? highlight : tint.opacity(0.2), lineWidth: on ? 2 : 1))
+                            Text(f.name).font(.system(size: 11)).foregroundColor(on ? highlight : tint.opacity(0.7))
                         }
                     }
                 }
-            }.padding(.horizontal, 4)
+            }
+            .padding(.horizontal, 4)
+            // Centre the strip when it fits; it still scrolls when it doesn't.
+            .frame(maxWidth: .infinity)
         }
     }
 
-    // Row 3 — Cancel | crop / adjust / filter | Done
+    // Row 3 — Cancel | crop / adjust / filter | Done.
+    // A ZStack so the mode switcher is centred on the SCREEN, not merely
+    // between two differently-sized buttons (spacer-centering drifts).
     private func modeBar() -> some View {
         let viewport = Self.viewport(for: stageSize, ratio: aspectRatio)
         let fitScale = max(viewport.width / image.size.width, viewport.height / image.size.height)
-        return HStack {
-            Button("Cancel") { edited ? (showDiscard = true) : onCancel() }.foregroundColor(.primary)
-            Spacer()
+        return ZStack {
+            HStack {
+                Button("Cancel") { edited ? (showDiscard = true) : onCancel() }.foregroundColor(tint)
+                Spacer()
+                Button("Done") {
+                    // Guard against a Done tapped before the image area is measured
+                    // (stageSize == .zero → zero viewport → a blank crop). Harmless
+                    // for adjust/filter-only, which don't use the viewport.
+                    if config.modes.contains("crop") && (stageSize.width <= 0 || stageSize.height <= 0) { return }
+                    onDone(CropState(scale: scale, rotationDeg: rotationDeg, offset: offset, fitScale: fitScale,
+                                     viewport: viewport, shape: shape, aspectRatio: aspectRatio,
+                                     brightness: brightness, contrast: contrast, saturation: saturation))
+                }.foregroundColor(accent).bold()
+            }
             // Only show the mode switcher when more than one mode is enabled.
             if config.modes.count > 1 {
                 HStack(spacing: 26) {
@@ -394,12 +500,6 @@ private struct EditorView: View {
                     if config.modes.contains("filter") { modeIcon("filter", "camera.filters") }
                 }
             }
-            Spacer()
-            Button("Done") {
-                onDone(CropState(scale: scale, rotationDeg: rotationDeg, offset: offset, fitScale: fitScale,
-                                 viewport: viewport, shape: shape, aspectRatio: aspectRatio,
-                                 brightness: brightness, contrast: contrast, saturation: saturation))
-            }.foregroundColor(accent).bold()
         }
     }
 
@@ -407,9 +507,9 @@ private struct EditorView: View {
         Button { mode = key } label: {
             Image(systemName: symbol)
                 .font(.system(size: 20))
-                .foregroundColor(mode == key ? Color(.systemBackground) : .primary.opacity(0.7))
+                .foregroundColor(mode == key ? themeBg : tint.opacity(0.7))
                 .frame(width: 46, height: 46)
-                .background(Circle().fill(mode == key ? Color.primary : Color.clear))
+                .background(Circle().fill(mode == key ? tint : Color.clear))
         }
     }
 
@@ -498,6 +598,8 @@ private struct RulerSlider: View {
     let value: Double
     let range: ClosedRange<Double>
     let display: String
+    let tint: Color       // labels / inactive marks (host-app text color)
+    let highlight: Color  // active value + filled marks
     let onChange: (Double) -> Void
 
     private var span: Double { range.upperBound - range.lowerBound }
@@ -505,7 +607,7 @@ private struct RulerSlider: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(display).foregroundColor(.green).font(.system(size: 14, weight: .semibold))
+            Text(display).foregroundColor(highlight).font(.system(size: 14, weight: .semibold))
             HStack(spacing: 14) {
                 Button { onChange(clamp(value - span / 60)) } label: { icon("minus") }
                 track
@@ -520,21 +622,22 @@ private struct RulerSlider: View {
             HStack(spacing: (w - CGFloat(n) * 2) / CGFloat(n - 1)) {
                 ForEach(0..<n, id: \.self) { i in
                     let f = Double(i) / Double(n - 1)
-                    Capsule().fill(f <= fraction ? Color.green : Color.primary.opacity(0.25))
+                    Capsule().fill(f <= fraction ? highlight : tint.opacity(0.25))
                         .frame(width: 2, height: i % 5 == 0 ? 20 : 11)
                 }
             }
             .frame(width: w, height: 40, alignment: .center)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { g in
+                guard w > 0 else { return }   // no NaN into scale/rotation/brightness on the first layout pass
                 onChange(range.lowerBound + min(1, max(0, g.location.x / w)) * span)
             })
         }.frame(height: 40)
     }
 
     private func icon(_ name: String) -> some View {
-        Image(systemName: name).foregroundColor(.primary.opacity(0.85))
-            .frame(width: 34, height: 34).background(Circle().fill(Color.primary.opacity(0.08)))
+        Image(systemName: name).foregroundColor(tint.opacity(0.85))
+            .frame(width: 34, height: 34).background(Circle().fill(tint.opacity(0.08)))
     }
     private func clamp(_ v: Double) -> Double { min(range.upperBound, max(range.lowerBound, v)) }
 }
@@ -553,13 +656,13 @@ enum CropRenderer {
             }
             let coloured = applyColour(full, state: state)
             var url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("cropped_\(Int(Date().timeIntervalSince1970 * 1000)).jpg")
+                .appendingPathComponent("cropped_\(UUID().uuidString).jpg")
             guard let data = coloured.jpegData(compressionQuality: 0.92) else { return nil }
             do {
                 try data.write(to: url)
                 var rv = URLResourceValues(); rv.isExcludedFromBackup = true
                 try? url.setResourceValues(rv)
-                return url.path(percentEncoded: false)
+                return url.path
             } catch { return nil }
         }
 
@@ -588,7 +691,7 @@ enum CropRenderer {
 
         let fm = FileManager.default
         let ext = state.shape == "circle" ? "png" : "jpg"
-        var url = fm.temporaryDirectory.appendingPathComponent("cropped_\(Int(Date().timeIntervalSince1970 * 1000)).\(ext)")
+        var url = fm.temporaryDirectory.appendingPathComponent("cropped_\(UUID().uuidString).\(ext)")
         let data = state.shape == "circle" ? final.pngData() : final.jpegData(compressionQuality: 0.92)
         guard let data else { return nil }
         do {
