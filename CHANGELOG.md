@@ -4,7 +4,7 @@ All notable changes to `vipertecpro/image-cropper` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this
 project adheres to [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.3.0] - 2026-07-28
 
 ### Added
 - **Crop straight from a URL** — `ImageCropper::open()` now also accepts an
@@ -101,6 +101,7 @@ First complete, usable release.
 
 - Initial release. **Incomplete — superseded by 1.0.1.** Please use 1.0.1 or newer.
 
+[1.3.0]: https://github.com/vipertecpro/image-cropper/releases/tag/v1.3.0
 [1.2.0]: https://github.com/vipertecpro/image-cropper/releases/tag/v1.2.0
 [1.1.0]: https://github.com/vipertecpro/image-cropper/releases/tag/v1.1.0
 [1.0.2]: https://github.com/vipertecpro/image-cropper/releases/tag/v1.0.2
