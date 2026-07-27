@@ -327,3 +327,45 @@ describe('Lifecycle Hooks', function () {
         }
     });
 });
+
+describe('Source Validation', function () {
+    // open() validates the source BEFORE touching the bridge; in this test
+    // environment nativephp_call() does not exist, so a valid source is a
+    // silent no-op and an invalid one throws.
+
+    it('accepts croppable local paths', function (string $path) {
+        (new ImageCropper)->open($path);
+        expect(true)->toBeTrue();
+    })->with(['/tmp/photo.jpg', '/tmp/photo.JPEG', '/tmp/pic.png', '/tmp/anim.gif', '/tmp/pic.webp', '/tmp/pic.heic', '/tmp/pic.avif']);
+
+    it('accepts extensionless local paths (content is validated natively)', function () {
+        (new ImageCropper)->open('/tmp/picked_image');
+        expect(true)->toBeTrue();
+    });
+
+    it('accepts http(s) image URLs', function (string $url) {
+        (new ImageCropper)->open($url);
+        expect(true)->toBeTrue();
+    })->with([
+        'https://example.com/avatar.png',
+        'http://example.com/photo.jpg',
+        'https://picsum.photos/1200/800',                       // no extension — native decode validates
+        'https://example.com/image.JPG?width=500&sig=abc',      // query string ignored
+    ]);
+
+    it('rejects non-croppable extensions', function (string $source) {
+        expect(fn () => (new ImageCropper)->open($source))
+            ->toThrow(InvalidArgumentException::class, 'croppable formats are');
+    })->with(['/tmp/document.pdf', '/tmp/movie.mp4', '/tmp/notes.txt', 'https://example.com/document.pdf', 'https://example.com/clip.mov']);
+
+    it('rejects unsupported URL schemes', function (string $source) {
+        expect(fn () => (new ImageCropper)->open($source))
+            ->toThrow(InvalidArgumentException::class, 'http(s)');
+    })->with(['ftp://example.com/photo.jpg', 'file://tmp/photo.png', 'data://text/plain;base64,aGk=']);
+
+    it('lists only lowercase croppable extensions', function () {
+        foreach (ImageCropper::CROPPABLE_EXTENSIONS as $ext) {
+            expect($ext)->toBe(strtolower($ext));
+        }
+    });
+});

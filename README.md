@@ -89,10 +89,22 @@ Display the result with `native:image`, e.g. a round avatar:
 
 ### Getting an image to crop
 
-The plugin's only input is a **file path** to an existing image — it does not
-capture or pick photos itself, so it has no hard dependency on any camera plugin.
-Any source of a path works: the filesystem, a bundled asset, a download, or a
-picker of your choice.
+The plugin's input is a **file path** to an existing image **or an http(s)
+URL** — it does not capture or pick photos itself, so it has no hard dependency
+on any camera plugin. Any source works: the filesystem, a bundled asset, a
+picker of your choice, or a remote image.
+
+```php
+// Crop an image that lives on your CDN/API — the plugin downloads it
+// natively (themed loading screen with Cancel), then opens the editor:
+ImageCropper::open('https://cdn.example.com/avatars/current.jpg', ['preset' => 'profile']);
+```
+
+Only **croppable image formats** are accepted (`jpg`, `jpeg`, `png`, `gif`,
+`webp`, `bmp`, `heic`, `heif`, `avif`): a source with any other extension
+throws an `InvalidArgumentException` immediately, and the native side
+additionally verifies the actual **content** decodes as an image (extensions
+can lie) — undecodable content fires `CropCancelled`, as do download failures.
 
 If you need a picker, [`nativephp/mobile-camera`](https://nativephp.com/plugins/nativephp/mobile-camera)
 is convenient (listed under `suggest`, not `require`). Install and register it
@@ -101,7 +113,7 @@ separately, then hand its result path to `ImageCropper::open()`.
 ### API
 
 ```php
-ImageCropper::open(string $path, array $options = []): void;
+ImageCropper::open(string $pathOrUrl, array $options = []): void;
 ```
 
 The crop experience is **configurable** so one plugin covers many use cases.

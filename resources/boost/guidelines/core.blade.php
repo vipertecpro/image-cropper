@@ -6,11 +6,17 @@ to PHP via an event. Works with NativePHP Mobile v3 and v4.
 
 ### What it does / does not do
 
-- It edits an image the app **already has a file path for** — it does NOT capture
-  or pick photos. Feed it any path (a bundled asset, a download, or the result of
-  a camera/gallery picker such as `nativephp/mobile-camera`).
-- Input: a single absolute file path. Output: a brand-new cropped JPEG (or a
-  transparent PNG for circle crops) — the source file is never modified.
+- It edits an existing image — it does NOT capture or pick photos. Feed it a
+  local file path (a bundled asset, a download, or the result of a
+  camera/gallery picker such as `nativephp/mobile-camera`) **or an http(s)
+  URL** — remote images are downloaded natively (themed loading screen with
+  Cancel) before the editor opens.
+- Input: one absolute file path or URL. Output: a brand-new cropped JPEG (or a
+  transparent PNG for circle crops) — the source is never modified.
+- Only croppable formats are accepted (jpg, jpeg, png, gif, webp, bmp, heic,
+  heif, avif). Other extensions throw `InvalidArgumentException` immediately;
+  content that doesn't actually decode as an image (or a failed download)
+  fires `CropCancelled`.
 - The call is fire-and-forget: `open()` returns `void`; the result arrives later
   as an event.
 

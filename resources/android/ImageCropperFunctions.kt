@@ -29,6 +29,11 @@ import android.os.Looper
 import android.util.Log
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -104,6 +109,9 @@ object ImageCropperFunctions {
     private const val EVENT_CROPPED = "Vipertecpro\\ImageCropper\\Events\\ImageCropped"
     private const val EVENT_CANCELLED = "Vipertecpro\\ImageCropper\\Events\\CropCancelled"
 
+    /** Remote images larger than this are rejected before decoding (mirrors iOS). */
+    private const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
+
     data class CropPreset(val key: String, val label: String, val shape: String, val aspectRatio: Float)
 
     /**
@@ -178,7 +186,13 @@ object ImageCropperFunctions {
                 dispatch(EVENT_CANCELLED, config.id); return
             }
 
-            val bitmap = loadUprightBitmap(config.path, config.outputSize)
+            val remote = config.path.startsWith("http://", ignoreCase = true) ||
+                config.path.startsWith("https://", ignoreCase = true)
+
+            // Local sources decode up-front (a failure never shows a screen);
+            // remote sources show the loading screen first and decode after the
+            // native download completes.
+            val localBitmap = if (remote) null else loadUprightBitmap(config.path, config.outputSize)
                 ?: run { dispatch(EVENT_CANCELLED, config.id); return }
             val night = (activity.resources.configuration.uiMode and
                 android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
@@ -219,7 +233,15 @@ object ImageCropperFunctions {
             }
             activity.onBackPressedDispatcher.addCallback(backCallback)
 
+            // null while a remote download is in flight → the loading screen shows.
+            val bitmapState = androidx.compose.runtime.mutableStateOf(localBitmap)
+
             view.setContent {
+                val bitmap = bitmapState.value
+                if (bitmap == null) {
+                    DownloadingScreen(config.theme) { finishCancelled() }
+                    return@setContent
+                }
                 EditorScreen(bitmap, config,
                     onCancel = { edited ->
                         if (edited) {
@@ -244,6 +266,62 @@ object ImageCropperFunctions {
                     })
             }
             root.addView(view)
+
+            if (remote) {
+                // Native download off the UI thread; decode through the same
+                // downsampling/EXIF loader as local files, then swap in the
+                // editor. Every failure resolves as CropCancelled.
+                Thread {
+                    val file = downloadToCache(config.path)
+                    val decoded = try {
+                        file?.let { loadUprightBitmap(it.absolutePath, config.outputSize) }
+                    } catch (t: Throwable) { Log.e(TAG, "remote decode failed: ${t.message}", t); null }
+                    file?.delete()
+                    activity.runOnUiThread {
+                        if (finished.get()) return@runOnUiThread   // user cancelled mid-download
+                        if (decoded != null) bitmapState.value = decoded else finishCancelled()
+                    }
+                }.start()
+            }
+        }
+
+        /**
+         * Download an http(s) source to the app cache. Bounded (30s read
+         * timeout, 64 MB cap) and quiet — any failure returns null, which the
+         * caller resolves as CropCancelled. HTTPS is recommended; cleartext
+         * http is subject to the app's network security policy.
+         */
+        private fun downloadToCache(urlString: String): File? {
+            var connection: java.net.HttpURLConnection? = null
+            return try {
+                connection = (java.net.URL(urlString).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                    instanceFollowRedirects = true
+                }
+                if (connection.responseCode !in 200..299) return null
+                if (connection.contentLengthLong > MAX_DOWNLOAD_BYTES) return null
+
+                val file = File(activity.cacheDir, "cropper_download_${java.util.UUID.randomUUID()}")
+                var total = 0L
+                connection.inputStream.use { input ->
+                    FileOutputStream(file).use { out ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            total += n
+                            if (total > MAX_DOWNLOAD_BYTES) { file.delete(); return null }
+                            out.write(buffer, 0, n)
+                        }
+                    }
+                }
+                if (total == 0L) { file.delete(); null } else file
+            } catch (t: Throwable) {
+                Log.e(TAG, "download failed: ${t.message}", t); null
+            } finally {
+                connection?.disconnect()
+            }
         }
 
         private fun dispatch(event: String, id: String?, path: String? = null) {
@@ -704,6 +782,39 @@ private fun parsePresets(any: Any?): List<ImageCropperFunctions.CropPreset> = wh
             jo.optDouble("aspectRatio", 1.0).toFloat().coerceAtLeast(0.01f))
     }
     else -> emptyList()
+}
+
+/**
+ * Shown while a remote (http/https) source downloads — themed like the editor,
+ * with a Cancel that fires CropCancelled. The spinner is hand-drawn (an
+ * animated arc) so the plugin needs no Material dependency. Mirrors iOS.
+ */
+@Composable
+private fun DownloadingScreen(theme: ImageCropperFunctions.CropTheme, onCancel: () -> Unit) {
+    val surface = theme.background ?: surfaceColor()
+    val onSurface = theme.text ?: onSurfaceColor()
+    val highlight = theme.highlight ?: Color(0xFF34C759)
+    val angle by rememberInfiniteTransition(label = "spin").animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)), label = "spin"
+    )
+
+    Column(
+        Modifier.fillMaxSize().background(surface),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Canvas(Modifier.size(44.dp)) {
+            drawArc(
+                highlight, startAngle = angle, sweepAngle = 270f, useCenter = false,
+                style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
+            )
+        }
+        BasicText("Loading image…", Modifier.padding(top = 18.dp),
+            style = TextStyle(color = onSurface.copy(alpha = 0.8f), fontSize = 15.sp))
+        BasicText("Cancel", Modifier.padding(top = 14.dp).clickable { onCancel() },
+            style = TextStyle(color = onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold))
+    }
 }
 
 /** Theme-adaptive colours that follow the system light/dark setting. */

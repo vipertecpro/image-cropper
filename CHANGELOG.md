@@ -4,6 +4,20 @@ All notable changes to `vipertecpro/image-cropper` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this
 project adheres to [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **Crop straight from a URL** — `ImageCropper::open()` now also accepts an
+  http(s) URL. The native side downloads the image (themed loading screen with
+  Cancel, 30s timeouts, 64 MB cap) and then opens the same editor as for local
+  files. Download or decode failures fire `CropCancelled`.
+- **Croppable-formats-only validation** — sources are gated on the croppable
+  extension allowlist (`jpg`, `jpeg`, `png`, `gif`, `webp`, `bmp`, `heic`,
+  `heif`, `avif`): anything else throws `InvalidArgumentException` before the
+  bridge is called, and the native side additionally verifies the actual bytes
+  decode as an image. The Android manifest now declares the `INTERNET`
+  permission for remote sources.
+
 ## [1.2.0] - 2026-07-27
 
 ### Added

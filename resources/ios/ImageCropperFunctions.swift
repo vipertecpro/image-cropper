@@ -138,8 +138,12 @@ private enum CropEvents {
 
 final class ImageCropperPresenter {
     static let shared = ImageCropperPresenter()
-    private var hosting: UIViewController?
+    private var hosting: UIHostingController<AnyView>?
     private var finished = false
+    private var downloadTask: URLSessionDownloadTask?
+
+    /// Remote images larger than this are rejected before decoding.
+    private static let maxDownloadBytes: Int64 = 64 * 1024 * 1024
 
     func present(config: CropConfig) {
         // Re-entrancy guard: only one editor at a time. A second Open (e.g. a
@@ -147,16 +151,46 @@ final class ImageCropperPresenter {
         // orphan the live editor or lose an event.
         guard hosting == nil else { send(CropEvents.cancelled, ["id": config.id as Any]); return }
 
-        // Downsample on decode: bounds memory (a full-res camera photo can spike
-        // and get the app jettisoned) and applies EXIF orientation up-front.
-        let maxPixel = min(4096, max(2048, config.outputSize * 2))
-        guard let image = Self.loadImage(path: config.path, maxPixel: maxPixel),
+        if Self.isRemote(config.path) {
+            // Remote source: present a themed loading screen immediately (with
+            // Cancel), download natively, then swap in the editor.
+            finished = false
+            let host = makeHost(config: config)
+            host.rootView = AnyView(DownloadingView(theme: config.theme) { [weak self] in
+                self?.downloadTask?.cancel()
+                self?.finish(CropEvents.cancelled, ["id": config.id as Any])
+            })
+            hosting = host
+            presentWhenReady(host, id: config.id, attempts: 0)
+            startDownload(config: config)
+            return
+        }
+
+        // Local source: decode first (downsampled, EXIF applied), then present.
+        guard let image = Self.loadImage(path: config.path, maxPixel: Self.maxPixel(for: config)),
               image.size.width > 0, image.size.height > 0 else {
             send(CropEvents.cancelled, ["id": config.id as Any]); return
         }
 
         finished = false
-        let view = EditorView(
+        let host = makeHost(config: config)
+        host.rootView = AnyView(editorView(image: image, config: config))
+        hosting = host
+        // Present once the top view controller is idle. When Open is called right
+        // after the gallery picker is dismissed, the picker is still mid-dismiss
+        // and iOS SILENTLY refuses the presentation — so we retry until it's ready.
+        presentWhenReady(host, id: config.id, attempts: 0)
+    }
+
+    private func makeHost(config: CropConfig) -> UIHostingController<AnyView> {
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        host.modalPresentationStyle = .fullScreen
+        host.view.backgroundColor = config.theme.background ?? .systemBackground
+        return host
+    }
+
+    private func editorView(image: UIImage, config: CropConfig) -> EditorView {
+        EditorView(
             image: image, config: config,
             onCancel: { [weak self] in self?.finish(CropEvents.cancelled, ["id": config.id as Any]) },
             onDone: { [weak self] state in
@@ -169,14 +203,59 @@ final class ImageCropperPresenter {
                 }
             }
         )
-        let host = UIHostingController(rootView: view)
-        host.modalPresentationStyle = .fullScreen
-        host.view.backgroundColor = config.theme.background ?? .systemBackground
-        hosting = host
-        // Present once the top view controller is idle. When Open is called right
-        // after the gallery picker is dismissed, the picker is still mid-dismiss
-        // and iOS SILENTLY refuses the presentation — so we retry until it's ready.
-        presentWhenReady(host, id: config.id, attempts: 0)
+    }
+
+    private static func isRemote(_ source: String) -> Bool {
+        let lower = source.lowercased()
+        return lower.hasPrefix("http://") || lower.hasPrefix("https://")
+    }
+
+    private static func maxPixel(for config: CropConfig) -> Int {
+        min(4096, max(2048, config.outputSize * 2))
+    }
+
+    /// Download the remote image to a temp file, decode it through the same
+    /// downsampling loader as local sources, then swap the loading screen for
+    /// the editor. EVERY failure path — bad URL, network error, non-2xx,
+    /// oversized body, undecodable bytes — resolves as CropCancelled.
+    private func startDownload(config: CropConfig) {
+        guard let url = URL(string: config.path) else {
+            finish(CropEvents.cancelled, ["id": config.id as Any]); return
+        }
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.timeoutIntervalForRequest = 30
+        sessionConfig.timeoutIntervalForResource = 120
+        let session = URLSession(configuration: sessionConfig)
+        let task = session.downloadTask(with: url) { [weak self] tempURL, response, error in
+            // Claim the file on the session queue — it's deleted when this
+            // completion returns — then finish on main.
+            var stableURL: URL?
+            if error == nil, let tempURL,
+               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                let attributes = try? FileManager.default.attributesOfItem(atPath: tempURL.path)
+                let byteSize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+                if byteSize > 0, byteSize <= Self.maxDownloadBytes {
+                    let dst = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("cropper_download_\(UUID().uuidString)")
+                    if (try? FileManager.default.moveItem(at: tempURL, to: dst)) != nil { stableURL = dst }
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self, !self.finished else {
+                    if let stableURL { try? FileManager.default.removeItem(at: stableURL) }
+                    return
+                }
+                defer { if let stableURL { try? FileManager.default.removeItem(at: stableURL) } }
+                guard let stableURL,
+                      let image = Self.loadImage(path: stableURL.path, maxPixel: Self.maxPixel(for: config)),
+                      image.size.width > 0, image.size.height > 0 else {
+                    self.finish(CropEvents.cancelled, ["id": config.id as Any]); return
+                }
+                self.hosting?.rootView = AnyView(self.editorView(image: image, config: config))
+            }
+        }
+        downloadTask = task
+        task.resume()
     }
 
     private func presentWhenReady(_ host: UIViewController, id: String?, attempts: Int) {
@@ -231,6 +310,32 @@ final class ImageCropperPresenter {
         var top = scene?.windows.first { $0.isKeyWindow }?.rootViewController
         while let p = top?.presentedViewController { top = p }
         return top
+    }
+}
+
+// MARK: - Remote download screen
+
+/// Shown while a remote (http/https) source downloads — themed like the
+/// editor, with a Cancel that aborts the transfer and fires CropCancelled.
+private struct DownloadingView: View {
+    let theme: CropTheme
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: theme.highlightColor))
+                .scaleEffect(1.4)
+            Text("Loading image…")
+                .font(.system(size: 15))
+                .foregroundColor(theme.textColor.opacity(0.8))
+            Button("Cancel", action: onCancel)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(theme.textColor)
+                .padding(.top, 10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(theme.backgroundColor.ignoresSafeArea())
     }
 }
 

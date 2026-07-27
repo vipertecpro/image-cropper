@@ -33,7 +33,9 @@
     ],
     "android": {
         "min_version": 26,
-        "permissions": [],
+        "permissions": [
+            "android.permission.INTERNET"
+        ],
         "repositories": [],
         "dependencies": {
             "implementation": []

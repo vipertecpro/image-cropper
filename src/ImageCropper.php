@@ -61,6 +61,16 @@ class ImageCropper
     public const AVAILABLE_TOOLS = ['zoom', 'rotate'];
 
     /**
+     * File extensions the editor accepts — image formats the native platforms
+     * can decode and crop. This is the EARLY, developer-facing gate: a source
+     * whose extension is not in this list is rejected with an exception before
+     * the bridge is ever called. The native side then performs the REAL check
+     * by decoding the bytes (extensions can lie; decoding can't) and fires
+     * CropCancelled if the content isn't a decodable image.
+     */
+    public const CROPPABLE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif'];
+
+    /**
      * Editor modes that can be enabled per call. Pass a subset to strip the UI
      * down — e.g. `['crop']` for a bare cropper with no colour editing. The
      * first entry is the mode the editor opens on.
@@ -82,7 +92,12 @@ class ImageCropper
     /**
      * Open the native crop screen.
      *
-     * @param  string  $path  Absolute path to the source image (jpg/png).
+     * @param  string  $path  Absolute path to a source image on the device, OR
+     *                        an http(s) URL — remote images are downloaded by
+     *                        the native side (with a themed loading screen and
+     *                        Cancel) before the editor opens. Only croppable
+     *                        image formats are accepted; see
+     *                        {@see CROPPABLE_EXTENSIONS}.
      * @param  array{
      *     preset?: string,
      *     shape?: string,
@@ -104,15 +119,56 @@ class ImageCropper
      *              defaults.
      *
      * Fires {@see ImageCropped} on success and
-     * {@see CropCancelled} on cancel.
+     * {@see CropCancelled} on cancel (including when a remote download fails
+     * or the source bytes don't decode as an image).
+     *
+     * @throws \InvalidArgumentException When the source is not a croppable
+     *                                   image format or uses an unsupported
+     *                                   URL scheme.
      */
     public function open(string $path, array $options = []): void
     {
+        $this->assertCroppableSource($path);
+
         if (! function_exists('nativephp_call')) {
             return;
         }
 
         nativephp_call('ImageCropper.Open', json_encode($this->resolveConfig($path, $options)));
+    }
+
+    /**
+     * Reject sources that can never be cropped, LOUDLY, before touching the
+     * bridge — a wrong-format path is a developer error, not a user cancel.
+     *
+     *  - http(s) URLs are allowed; when the URL path carries an extension it
+     *    must be croppable. Extensionless URLs (e.g. picsum.photos/1200) pass
+     *    here and are content-validated by the native decode after download.
+     *  - Any other "scheme://" source is unsupported.
+     *  - Local paths with an extension must use a croppable one. Extensionless
+     *    local files pass here and are validated by the native decode.
+     */
+    protected function assertCroppableSource(string $source): void
+    {
+        if (preg_match('/^([a-z][a-z0-9+.-]*):\/\//i', $source, $m) === 1) {
+            if (! in_array(strtolower($m[1]), ['http', 'https'], true)) {
+                throw new \InvalidArgumentException(
+                    "ImageCropper only supports local paths and http(s) URLs — got scheme \"{$m[1]}\"."
+                );
+            }
+
+            $urlPath = (string) parse_url($source, PHP_URL_PATH);
+            $extension = strtolower(pathinfo($urlPath, PATHINFO_EXTENSION));
+        } else {
+            $extension = strtolower(pathinfo($source, PATHINFO_EXTENSION));
+        }
+
+        if ($extension !== '' && ! in_array($extension, self::CROPPABLE_EXTENSIONS, true)) {
+            throw new \InvalidArgumentException(
+                "ImageCropper cannot crop \".{$extension}\" files — croppable formats are: "
+                .implode(', ', self::CROPPABLE_EXTENSIONS).'.'
+            );
+        }
     }
 
     /**
