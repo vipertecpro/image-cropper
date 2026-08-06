@@ -1,10 +1,6 @@
 # ImageCropper — a native image cropper & editor for NativePHP Mobile
 
-[![Packagist Version](https://img.shields.io/packagist/v/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper)
-[![Total Downloads](https://img.shields.io/packagist/dt/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper)
-[![PHP Version](https://img.shields.io/packagist/php-v/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper)
-[![License](https://img.shields.io/packagist/l/vipertecpro/image-cropper.svg?style=flat-square)](LICENSE)
-[![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-blue?style=flat-square)](#requirements)
+[![Packagist Version](https://img.shields.io/packagist/v/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper) [![Total Downloads](https://img.shields.io/packagist/dt/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper) [![PHP Version](https://img.shields.io/packagist/php-v/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper) [![License](https://img.shields.io/packagist/l/vipertecpro/image-cropper.svg?style=flat-square)](LICENSE) [![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-blue?style=flat-square)](#requirements)
 
 Open a **fully native** crop & edit screen from PHP — the user drags, pinch-zooms
 and two-finger-rotates the image behind a crop frame, then you get a **real
