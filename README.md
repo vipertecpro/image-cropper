@@ -20,7 +20,8 @@ one simple PHP API and **zero third-party native libraries**.
 ## Requirements
 
 - PHP 8.4+
-- NativePHP Mobile v3 or v4 (`nativephp/mobile: ^3.0|^4.0`)
+- NativePHP Mobile v3 or v4 (`nativephp/mobile: ^3.0|^4.0`) — tested on iOS and
+  Android against 4.6
 - iOS 15+ / Android API 26+
 
 ## Installation

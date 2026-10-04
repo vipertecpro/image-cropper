@@ -4,6 +4,19 @@ All notable changes to `vipertecpro/image-cropper` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this
 project adheres to [Semantic Versioning](https://semver.org).
 
+## [1.3.1] - 2026-10-04
+
+### Fixed
+- **Android: the clock and battery were unreadable over the editor.** The
+  editor is drawn over the host screen and kept the host's system-bar icon
+  colour, so a host with dark icons left them dark on the dark editor. The
+  icons now follow the editor's own background while it is open, and the
+  host's setting comes back when it closes.
+
+### Changed
+- Tested on iOS and Android against NativePHP Mobile 4.6. No changes were
+  needed for it.
+
 ## [1.3.0] - 2026-07-28
 
 ### Added
