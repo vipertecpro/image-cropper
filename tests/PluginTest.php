@@ -179,7 +179,6 @@ describe('Cropper API', function () {
     it('resolves presets to shape + aspect ratio', function () {
         $cropper = new ImageCropper;
         $resolve = (new ReflectionMethod($cropper, 'resolveConfig'));
-        $resolve->setAccessible(true);
 
         $profile = $resolve->invoke($cropper, '/a.jpg', ['preset' => 'profile']);
         expect($profile['shape'])->toBe('circle')->and($profile['aspectRatio'])->toBe(1.0);
@@ -234,7 +233,6 @@ describe('Cropper API', function () {
     it('carries the switchable preset list in the resolved config', function () {
         $cropper = new ImageCropper;
         $resolve = (new ReflectionMethod($cropper, 'resolveConfig'));
-        $resolve->setAccessible(true);
 
         $all = $resolve->invoke($cropper, '/a.jpg', ['preset' => 'profile']);
         expect($all['presets'])->toHaveCount(count(ImageCropper::PRESETS));

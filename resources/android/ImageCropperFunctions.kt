@@ -196,14 +196,15 @@ object ImageCropperFunctions {
                 ?: run { dispatch(EVENT_CANCELLED, config.id); return }
             val night = (activity.resources.configuration.uiMode and
                 android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val editorBackground = config.theme.background?.toArgb()
+                ?: if (night) 0xFF0B0B0C.toInt() else 0xFFF4F4F5.toInt()
             val view = ComposeView(activity).apply {
                 tag = overlayTag
                 layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 // Opaque overlay — otherwise the picked image behind us shows
                 // through. Host-app theme wins; else follow the system theme
                 // (iOS: host.view.backgroundColor = theme ?? systemBackground).
-                setBackgroundColor(config.theme.background?.toArgb()
-                    ?: if (night) 0xFF0B0B0C.toInt() else 0xFFF4F4F5.toInt())
+                setBackgroundColor(editorBackground)
                 isClickable = true // swallow touches so they don't reach the screen underneath
             }
 
@@ -213,6 +214,16 @@ object ImageCropperFunctions {
             val prevOrientation = activity.requestedOrientation
             activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LOCKED
 
+            // The editor draws edge to edge over the host screen, so the system
+            // bars have to suit ITS background, not the host's: dark icons on
+            // the dark editor were unreadable. Put the host's choice back after.
+            val systemBars = androidx.core.view.WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+            val prevLightStatusBars = systemBars.isAppearanceLightStatusBars
+            val prevLightNavigationBars = systemBars.isAppearanceLightNavigationBars
+            val lightEditor = androidx.core.graphics.ColorUtils.calculateLuminance(editorBackground) > 0.5
+            systemBars.isAppearanceLightStatusBars = lightEditor
+            systemBars.isAppearanceLightNavigationBars = lightEditor
+
             // Deliver EXACTLY ONE terminal event: a double-tap on Done, Done racing
             // Cancel, or a Back press can otherwise fire two events / none.
             val finished = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -220,6 +231,8 @@ object ImageCropperFunctions {
             fun cleanup() {
                 (view.parent as? ViewGroup)?.removeView(view)
                 activity.requestedOrientation = prevOrientation
+                systemBars.isAppearanceLightStatusBars = prevLightStatusBars
+                systemBars.isAppearanceLightNavigationBars = prevLightNavigationBars
                 backCallback.remove()
                 // The source bitmap is intentionally NOT recycled here — a render
                 // thread may still be reading it; let GC reclaim it.
