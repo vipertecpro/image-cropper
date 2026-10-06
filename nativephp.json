@@ -29,16 +29,6 @@
         "ios"
     ],
     "icon": "resources/icon.png",
-    "screenshots": [
-        "resources/screenshots/01-studio-crop.jpg",
-        "resources/screenshots/02-profile-circle.jpg",
-        "resources/screenshots/04-filters.jpg",
-        "resources/screenshots/05-adjust.jpg",
-        "resources/screenshots/03-rotate.jpg",
-        "resources/screenshots/07-result.jpg",
-        "resources/screenshots/08-android.jpg",
-        "resources/screenshots/06-home.jpg"
-    ],
     "bridge_functions": [
         {
             "name": "ImageCropper.Open",
