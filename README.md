@@ -1,6 +1,4 @@
-# ImageCropper — a native image cropper & editor for NativePHP Mobile
-
-[![Packagist Version](https://img.shields.io/packagist/v/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper) [![Total Downloads](https://img.shields.io/packagist/dt/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper) [![PHP Version](https://img.shields.io/packagist/php-v/vipertecpro/image-cropper.svg?style=flat-square)](https://packagist.org/packages/vipertecpro/image-cropper) [![License](https://img.shields.io/packagist/l/vipertecpro/image-cropper.svg?style=flat-square)](LICENSE) [![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-blue?style=flat-square)](#requirements)
+# Image Cropper for NativePHP — a native image cropper & editor
 
 Open a **fully native** crop & edit screen from PHP — the user drags, pinch-zooms
 and two-finger-rotates the image behind a crop frame, then you get a **real
@@ -15,7 +13,7 @@ one simple PHP API and **zero third-party native libraries**.
 - 🧩 **Configurable** — enable only the modes/tools you need (crop-only, adjust-only, filter-only, …)
 - 🌗 **Theme-aware** — follows the system light / dark theme
 - 📦 **Zero dependencies** — no third-party native libraries, no permissions, no network
-- 🍏 🤖 **iOS + Android** behind one PHP API
+- 📱 **iOS + Android** behind one PHP API
 
 ## Requirements
 
@@ -94,7 +92,7 @@ picker of your choice, or a remote image.
 ```php
 // Crop an image that lives on your CDN/API — the plugin downloads it
 // natively (themed loading screen with Cancel), then opens the editor:
-ImageCropper::open('https://cdn.example.com/avatars/current.jpg', ['preset' => 'profile']);
+ImageCropper::open($user->avatar_url, ['preset' => 'profile']);   // an http(s) URL
 ```
 
 Only **croppable image formats** are accepted (`jpg`, `jpeg`, `png`, `gif`,
@@ -103,7 +101,7 @@ throws an `InvalidArgumentException` immediately, and the native side
 additionally verifies the actual **content** decodes as an image (extensions
 can lie) — undecodable content fires `CropCancelled`, as do download failures.
 
-If you need a picker, [`nativephp/mobile-camera`](https://nativephp.com/plugins/nativephp/mobile-camera)
+If you need a picker, `nativephp/mobile-camera`
 is convenient (listed under `suggest`, not `require`). Install and register it
 separately, then hand its result path to `ImageCropper::open()`.
 
@@ -176,10 +174,10 @@ A full sample NativePHP app showcases the plugin with **five ready-made examples
 (full studio, locked profile avatar, locked cover, adjust-only, filter-only) —
 each a tiny `NativeComponent` you can copy from:
 
-**👉 [vipertecpro/supernativephp-image-manipulation](https://github.com/vipertecpro/supernativephp-image-manipulation)**
+It lives in the **vipertecpro/supernativephp-image-manipulation** repository on
+GitHub. Clone it, then:
 
 ```bash
-git clone https://github.com/vipertecpro/supernativephp-image-manipulation
 cd supernativephp-image-manipulation
 composer install
 php artisan native:run ios   # or: android
@@ -187,13 +185,28 @@ php artisan native:run ios   # or: android
 
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+Issues and pull requests are welcome. See the `CONTRIBUTING.md` file included with the package for
 local setup, the project layout, how it works, and how to extend the crop editor.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for the full version history.
+See the `CHANGELOG.md` file included with the package for the full version history.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see the `LICENSE` file included with the package.
+
+## More free plugins for NativePHP
+
+The Image Cropper has free companions, each installed with Composer and made
+the same way (hand-written Swift and Kotlin, one PHP API):
+
+- **Photo Kit** — save a cropped image to the photo library, compress and resize it for upload, fix its EXIF orientation (vipertecpro/photo-kit)
+- **Message Composer** — native email and SMS composers with attachments, e.g. to send the cropped photo (vipertecpro/message-composer)
+- **OTP Autofill** — a one-time-code field with SMS autofill (vipertecpro/otp-autofill)
+- **Consent** — the tracking-permission prompt and a privacy-choices store (vipertecpro/consent)
+- **App Analytics & Remote Config** — analytics events and feature flags, works with Firebase (vipertecpro/app-analytics)
+
+vipertecpro is an independent developer. NativePHP, Laravel, Apple, Google, Firebase and other names are trademarks of their respective owners; this package is not affiliated with or endorsed by them. iOS and Apple are trademarks of Apple Inc. Android, Google Play and Firebase are trademarks of Google LLC.
+
+Image Cropper is a free plugin from vipertecpro.com, home of the paid plugins for NativePHP Mobile: Rich-Text Editor, Onboarding & Tours, Health Data and Native Charts.
