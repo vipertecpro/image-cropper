@@ -7,13 +7,13 @@ one simple PHP API and **zero third-party native libraries**.
 
 ## Features
 
-- ✂️ **Freehand crop** — 2D drag, pinch-zoom and two-finger rotate, all at once
+- **Freehand crop** — 2D drag, pinch-zoom and two-finger rotate, all at once
 - ⭕ **Shapes & presets** — circle or rectangle; Profile / Square / Portrait / 16:9 / Cover / Banner / Story, switchable live in-screen
-- 🎨 **Adjust & filter** — brightness / contrast / saturation and one-tap filters, baked into the output
-- 🧩 **Configurable** — enable only the modes/tools you need (crop-only, adjust-only, filter-only, …)
-- 🌗 **Theme-aware** — follows the system light / dark theme
-- 📦 **Zero dependencies** — no third-party native libraries, no permissions, no network
-- 📱 **iOS + Android** behind one PHP API
+- **Adjust & filter** — brightness / contrast / saturation and one-tap filters, baked into the output
+- **Configurable** — enable only the modes/tools you need (crop-only, adjust-only, filter-only, …)
+- **Theme-aware** — follows the system light / dark theme
+- **Zero dependencies** — no third-party native libraries, no permissions, no network
+- **iOS + Android** behind one PHP API
 
 ## Requirements
 
@@ -192,7 +192,7 @@ local setup, the project layout, how it works, and how to extend the crop editor
 
 See the `CHANGELOG.md` file included with the package for the full version history.
 
-## License
+## Licence
 
 MIT — see the `LICENSE` file included with the package.
 
