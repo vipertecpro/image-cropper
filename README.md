@@ -168,6 +168,48 @@ A JS bridge is shipped at `resources/js/imageCropper.js`. Because the result is
 async, subscribe to the native events with the `#nativephp` `On()` helper — see
 the file header for an example.
 
+## What you can build
+
+Image Cropper is a building block: the crop frame, the shapes and presets, the
+adjustments and filters, and the finished file are done, and the product around
+them is yours. These ideas sit comfortably inside store policy as long as people
+choose their own photos and you are open about where a cropped image goes. The
+plugin crops a file or an image URL you give it; picking or capturing the photo,
+and uploading the result, are yours.
+
+**Profiles and community**
+
+- **Profile pictures.** Open the editor with the `profile` preset for a round
+  avatar, then send the cropped file to your own server so it can be shown to
+  other people.
+- **Cover and banner images.** Use the `cover` or `banner` presets for the wide
+  header of a profile, a group or a channel.
+- **Story and status posts.** The `story` preset gives a tall frame; keep the
+  `modes` to `['crop', 'filter']` for a quick one-tap look before posting.
+
+**Shops and listings**
+
+- **Marketplace and classifieds listings.** Square or `portrait` product photos
+  that all look alike in a grid, with a light brightness and contrast fix baked
+  into the file.
+- **Restaurant and shop menus.** Staff crop a dish or a product photo to a fixed
+  ratio before adding it to the catalogue, so the layout stays tidy.
+
+**Creative and publishing**
+
+- **Recipe, travel and hobby journals.** Crop a photo to a fixed shape, adjust
+  colour with `modes => ['adjust']`, and keep the result in the journal.
+- **Event and course covers.** Lock the crop with `presets => []` and a fixed
+  `aspectRatio` so every organiser produces the same size of cover image.
+- **Brand-themed editors.** Pass the `theme` colours so the editor matches your
+  app, for a white-label app sold to several clients.
+
+Cropping happens on the device with no network, but fetching a remote image
+needs one. Saving to the photo library, compressing for upload and fixing
+orientation are in the Photo Kit companion; storing and serving images needs
+your own backend. Do not use the editor to mislead, for example to pass off an
+edited photo as an unedited one in a review or a verification flow.
+
 ## Demo app
 
 A full sample NativePHP app showcases the plugin with **five ready-made examples**
